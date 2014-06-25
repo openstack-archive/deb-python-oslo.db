@@ -1,0 +1,9 @@
+Document: oslo.db-doc
+Title: oslo.db Documentation
+Author: N/A
+Abstract: Sphinx documentation for oslo.db
+Section: Programming/Python
+
+Format: HTML
+Index: /usr/share/doc/python-oslo.db-doc/html/index.html
+Files: /usr/share/doc/python-oslo.db-doc/html/*

@@ -1,0 +1,69 @@
+Source: python-oslo.db
+Section: python
+Priority: optional
+Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
+Uploaders: Julien Danjou <acid@debian.org>,
+           Thomas Goirand <zigo@debian.org>,
+           Mehdi Abaakouk <sileht@sileht.net>,
+           Gonéri Le Bouder <goneri@debian.org>
+Build-Depends: debhelper (>= 9),
+               openstack-pkg-tools,
+               python-all (>= 2.6.6-3~),
+               python-pbr,
+               python-setuptools,
+               python-sphinx
+Build-Depends-Indep: alembic (>= 0.4.1),
+                     python-babel (>= 1.3),
+                     python-coverage (>= 3.6),
+                     python-fixtures (>= 0.3.14),
+                     python-iso8601 (>= 0.1.9),
+                     python-lockfile (>= 0.8),
+                     python-migrate (>= 0.9.1),
+                     python-mysqldb,
+                     python-oslo.config (>= 1.2.0),
+                     python-oslosphinx,
+                     python-oslotest,
+                     python-psycopg2,
+                     python-sqlalchemy (>= 0.7.8),
+                     python-stevedore (>= 0.14),
+                     python-subunit (>= 0.0.18),
+                     python-testscenarios (>= 0.4),
+                     python-testtools (>= 0.9.34),
+                     subunit (>= 0.0.18),
+                     testrepository (>= 0.0.18)
+Standards-Version: 3.9.5
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-oslo.db.git
+Vcs-Git: git://anonscm.debian.org/openstack/python-oslo.db.git
+Homepage: http://launchpad.net/oslo
+
+Package: python-oslo.db
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: alembic (>= 0.4.1),
+         python-babel (>= 1.3),
+         python-iso8601 (>= 0.1.9),
+         python-lockfile (>= 0.8),
+         python-migrate (>= 0.9.1),
+         python-oslo.config (>= 1.2.0),
+         python-sqlalchemy (>= 0.7.8),
+         python-stevedore (>= 0.14),
+         ${misc:Depends},
+         ${python:Depends}
+Description: database connectivity to the different backends and helper utils - Python 2.x
+ The Oslo database handling library is part of the OpenStack project. It
+ provides database connectivity to the different backends and also provides
+ helper utils.
+ .
+ This package contains the Python 2.x module.
+
+Package: python-oslo.db-doc
+Section: doc
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: ${misc:Depends}, ${sphinxdoc:Depends}
+Description: database connectivity to the different backends and helper utils - doc
+ The Oslo database handling library is part of the OpenStack project. It
+ provides database connectivity to the different backends and also provides
+ helper utils.
+ .
+ This package contains the documentation.

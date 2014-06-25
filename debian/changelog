@@ -1,0 +1,5 @@
+python-oslo.db (0.2.0-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #752621)
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 25 Jun 2014 16:11:40 +0800
