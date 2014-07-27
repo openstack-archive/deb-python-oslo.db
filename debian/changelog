@@ -1,6 +1,8 @@
 python-oslo.db (0.3.0-1) unstable; urgency=medium
 
   * New upstream release.
+  * Patches MANIFEST.in otherwise upstream setup.py is missing lots of files in
+    the oslo/db/openstack folder.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 28 Jul 2014 00:48:18 +0800
 

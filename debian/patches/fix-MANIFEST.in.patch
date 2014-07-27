@@ -1,0 +1,16 @@
+Description: Fix MANIFEST.in
+ Upstream setup.py is otherwise missing lots of files.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2014-07-28
+
+--- python-oslo.db-0.3.0.orig/MANIFEST.in
++++ python-oslo.db-0.3.0/MANIFEST.in
+@@ -2,5 +2,6 @@ include AUTHORS
+ include ChangeLog
+ exclude .gitignore
+ exclude .gitreview
++recursive-include oslo *.py
+ 
+ global-exclude *.pyc
+\ No newline at end of file
