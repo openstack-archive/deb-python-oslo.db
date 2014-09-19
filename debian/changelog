@@ -3,6 +3,8 @@ python-oslo.db (1.0.0-1) experimental; urgency=medium
   * New upstream release.
   * Uploading to Experimental before Jessie freeze.
   * Updated (build-)depends for this release.
+  * Allow the unit tests to fail because they don't work with the namespace of
+    oslo :(.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 19 Sep 2014 22:34:16 +0800
 
