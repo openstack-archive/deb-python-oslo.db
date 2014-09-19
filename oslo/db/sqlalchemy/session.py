@@ -278,223 +278,25 @@ Efficient use of soft deletes:
 
 """
 
-import functools
+import itertools
 import logging
 import re
 import time
 
+from oslo.utils import timeutils
 import six
-from sqlalchemy import exc as sqla_exc
-from sqlalchemy.interfaces import PoolListener
 import sqlalchemy.orm
-from sqlalchemy.pool import NullPool, StaticPool
+from sqlalchemy import pool
 from sqlalchemy.sql.expression import literal_column
+from sqlalchemy.sql.expression import select
 
+from oslo.db._i18n import _LW
 from oslo.db import exception
 from oslo.db import options
-from oslo.db.openstack.common.gettextutils import _LE, _LW
-from oslo.db.openstack.common import timeutils
-
+from oslo.db.sqlalchemy import exc_filters
+from oslo.db.sqlalchemy import utils
 
 LOG = logging.getLogger(__name__)
-
-
-class SqliteForeignKeysListener(PoolListener):
-    """Ensures that the foreign key constraints are enforced in SQLite.
-
-    The foreign key constraints are disabled by default in SQLite,
-    so the foreign key constraints will be enabled here for every
-    database connection
-    """
-    def connect(self, dbapi_con, con_record):
-        dbapi_con.execute('pragma foreign_keys=ON')
-
-
-# note(boris-42): In current versions of DB backends unique constraint
-# violation messages follow the structure:
-#
-# sqlite:
-# 1 column - (IntegrityError) column c1 is not unique
-# N columns - (IntegrityError) column c1, c2, ..., N are not unique
-#
-# sqlite since 3.7.16:
-# 1 column - (IntegrityError) UNIQUE constraint failed: tbl.k1
-#
-# N columns - (IntegrityError) UNIQUE constraint failed: tbl.k1, tbl.k2
-#
-# postgres:
-# 1 column - (IntegrityError) duplicate key value violates unique
-#               constraint "users_c1_key"
-# N columns - (IntegrityError) duplicate key value violates unique
-#               constraint "name_of_our_constraint"
-#
-# mysql:
-# 1 column - (IntegrityError) (1062, "Duplicate entry 'value_of_c1' for key
-#               'c1'")
-# N columns - (IntegrityError) (1062, "Duplicate entry 'values joined
-#               with -' for key 'name_of_our_constraint'")
-#
-# ibm_db_sa:
-# N columns - (IntegrityError) SQL0803N  One or more values in the INSERT
-#                statement, UPDATE statement, or foreign key update caused by a
-#                DELETE statement are not valid because the primary key, unique
-#                constraint or unique index identified by "2" constrains table
-#                "NOVA.KEY_PAIRS" from having duplicate values for the index
-#                key.
-_DUP_KEY_RE_DB = {
-    "sqlite": (re.compile(r"^.*columns?([^)]+)(is|are)\s+not\s+unique$"),
-               re.compile(r"^.*UNIQUE\s+constraint\s+failed:\s+(.+)$")),
-    "postgresql": (re.compile(r"^.*duplicate\s+key.*\"([^\"]+)\"\s*\n.*$"),),
-    "mysql": (re.compile(r"^.*\(1062,.*'([^\']+)'\"\)$"),),
-    "ibm_db_sa": (re.compile(r"^.*SQL0803N.*$"),),
-}
-
-
-def _raise_if_duplicate_entry_error(integrity_error, engine_name):
-    """Raise exception if two entries are duplicated.
-
-    In this function will be raised DBDuplicateEntry exception if integrity
-    error wrap unique constraint violation.
-    """
-
-    def get_columns_from_uniq_cons_or_name(columns):
-        # note(vsergeyev): UniqueConstraint name convention: "uniq_t0c10c2"
-        #                  where `t` it is table name and columns `c1`, `c2`
-        #                  are in UniqueConstraint.
-        uniqbase = "uniq_"
-        if not columns.startswith(uniqbase):
-            if engine_name == "postgresql":
-                return [columns[columns.index("_") + 1:columns.rindex("_")]]
-            return [columns]
-        return columns[len(uniqbase):].split("0")[1:]
-
-    if engine_name not in ("ibm_db_sa", "mysql", "sqlite", "postgresql"):
-        return
-
-    # FIXME(johannes): The usage of the .message attribute has been
-    # deprecated since Python 2.6. However, the exceptions raised by
-    # SQLAlchemy can differ when using unicode() and accessing .message.
-    # An audit across all three supported engines will be necessary to
-    # ensure there are no regressions.
-    for pattern in _DUP_KEY_RE_DB[engine_name]:
-        match = pattern.match(integrity_error.message)
-        if match:
-            break
-    else:
-        return
-
-    # NOTE(mriedem): The ibm_db_sa integrity error message doesn't provide the
-    # columns so we have to omit that from the DBDuplicateEntry error.
-    columns = ''
-
-    if engine_name != 'ibm_db_sa':
-        columns = match.group(1)
-
-    if engine_name == "sqlite":
-        columns = [c.split('.')[-1] for c in columns.strip().split(", ")]
-    else:
-        columns = get_columns_from_uniq_cons_or_name(columns)
-    raise exception.DBDuplicateEntry(columns, integrity_error)
-
-
-# NOTE(comstud): In current versions of DB backends, Deadlock violation
-# messages follow the structure:
-#
-# mysql:
-# (OperationalError) (1213, 'Deadlock found when trying to get lock; try '
-#                     'restarting transaction') <query_str> <query_args>
-#
-# postgresql:
-# (TransactionRollbackError) deadlock detected <deadlock_details>
-_DEADLOCK_RE_DB = {
-    "mysql": re.compile(r"^.*\(1213, 'Deadlock.*"),
-    "postgresql": re.compile(r"^.*deadlock detected.*")
-}
-
-
-def _raise_if_deadlock_error(operational_error, engine_name):
-    """Raise exception on deadlock condition.
-
-    Raise DBDeadlock exception if OperationalError contains a Deadlock
-    condition.
-    """
-    re = _DEADLOCK_RE_DB.get(engine_name)
-    if re is None:
-        return
-    # FIXME(johannes): The usage of the .message attribute has been
-    # deprecated since Python 2.6. However, the exceptions raised by
-    # SQLAlchemy can differ when using unicode() and accessing .message.
-    # An audit across all three supported engines will be necessary to
-    # ensure there are no regressions.
-    m = re.match(operational_error.message)
-    if not m:
-        return
-    raise exception.DBDeadlock(operational_error)
-
-
-def _wrap_db_error(f):
-    @functools.wraps(f)
-    def _wrap(self, *args, **kwargs):
-        try:
-            assert issubclass(
-                self.__class__, sqlalchemy.orm.session.Session
-            ), ('_wrap_db_error() can only be applied to methods of '
-                'subclasses of sqlalchemy.orm.session.Session.')
-
-            return f(self, *args, **kwargs)
-        except UnicodeEncodeError:
-            raise exception.DBInvalidUnicodeParameter()
-        except sqla_exc.OperationalError as e:
-            _raise_if_db_connection_lost(e, self.bind)
-            _raise_if_deadlock_error(e, self.bind.dialect.name)
-            # NOTE(comstud): A lot of code is checking for OperationalError
-            # so let's not wrap it for now.
-            raise
-        # note(boris-42): We should catch unique constraint violation and
-        # wrap it by our own DBDuplicateEntry exception. Unique constraint
-        # violation is wrapped by IntegrityError.
-        except sqla_exc.IntegrityError as e:
-            # note(boris-42): SqlAlchemy doesn't unify errors from different
-            # DBs so we must do this. Also in some tables (for example
-            # instance_types) there are more than one unique constraint. This
-            # means we should get names of columns, which values violate
-            # unique constraint, from error message.
-            _raise_if_duplicate_entry_error(e, self.bind.dialect.name)
-            raise exception.DBError(e)
-        except sqla_exc.DBAPIError as e:
-            # NOTE(wingwj): This branch is used to catch deadlock exception
-            # under postgresql. The original exception thrown from postgresql
-            # is TransactionRollbackError, it's not included in the sqlalchemy.
-            # Moreover, DBAPIError is the base class of OperationalError
-            # and IntegrityError, so we catch it on the end of the process.
-            #
-            # The issue has also submitted to sqlalchemy on
-            # https://bitbucket.org/zzzeek/sqlalchemy/issue/3075/
-            # support-non-standard-dbapi-exception
-            # (FIXME) This branch should be refactored after the patch
-            # merged in & our requirement of sqlalchemy updated
-            _raise_if_db_connection_lost(e, self.bind)
-            _raise_if_deadlock_error(e, self.bind.dialect.name)
-            LOG.exception(_LE('DBAPIError exception wrapped from %s') % e)
-            raise exception.DBError(e)
-        except Exception as e:
-            LOG.exception(_LE('DB exception wrapped.'))
-            raise exception.DBError(e)
-    return _wrap
-
-
-def _synchronous_switch_listener(dbapi_conn, connection_rec):
-    """Switch sqlite connections to non-synchronous mode."""
-    dbapi_conn.execute("PRAGMA synchronous = OFF")
-
-
-def _add_regexp_listener(dbapi_con, con_record):
-    """Add REGEXP function to sqlite connections."""
-
-    def regexp(expr, item):
-        reg = re.compile(expr)
-        return reg.search(six.text_type(item)) is not None
-    dbapi_con.create_function('regexp', 2, regexp)
 
 
 def _thread_yield(dbapi_con, con_record):
@@ -509,117 +311,43 @@ def _thread_yield(dbapi_con, con_record):
     time.sleep(0)
 
 
-def _ping_listener(engine, dbapi_conn, connection_rec, connection_proxy):
-    """Ensures that MySQL, PostgreSQL or DB2 connections are alive.
+def _begin_ping_listener(connection):
+    """Ping the server at transaction begin.
 
-    Borrowed from:
-    http://groups.google.com/group/sqlalchemy/msg/a4ce563d802c929f
+    Ping the server at transaction begin and transparently reconnect
+    if a disconnect exception occurs.
     """
-    cursor = dbapi_conn.cursor()
     try:
-        ping_sql = 'select 1'
-        if engine.name == 'ibm_db_sa':
-            # DB2 requires a table expression
-            ping_sql = 'select 1 from (values (1)) AS t1'
-        cursor.execute(ping_sql)
-    except Exception as ex:
-        if engine.dialect.is_disconnect(ex, dbapi_conn, cursor):
-            msg = _LW('Database server has gone away: %s') % ex
-            LOG.warning(msg)
+        # run a SELECT 1.   use a core select() so that
+        # any details like that needed by Oracle, DB2 etc. are handled.
+        connection.scalar(select([1]))
+    except exception.DBConnectionError:
+        # catch DBConnectionError, which is raised by the filter
+        # system.
+        # disconnect detected.  The connection is now
+        # "invalid", but the pool should be ready to return
+        # new connections assuming they are good now.
+        # run the select again to re-validate the Connection.
+        connection.scalar(select([1]))
 
-            # if the database server has gone away, all connections in the pool
-            # have become invalid and we can safely close all of them here,
-            # rather than waste time on checking of every single connection
-            engine.dispose()
 
-            # this will be handled by SQLAlchemy and will force it to create
-            # a new connection and retry the original action
-            raise sqla_exc.DisconnectionError(msg)
+def _setup_logging(connection_debug=0):
+    """setup_logging function maps SQL debug level to Python log level.
+
+    Connection_debug is a verbosity of SQL debugging information.
+    0=None(default value),
+    1=Processed only messages with WARNING level or higher
+    50=Processed only messages with INFO level or higher
+    100=Processed only messages with DEBUG level
+    """
+    if connection_debug >= 0:
+        logger = logging.getLogger('sqlalchemy.engine')
+        if connection_debug >= 100:
+            logger.setLevel(logging.DEBUG)
+        elif connection_debug >= 50:
+            logger.setLevel(logging.INFO)
         else:
-            raise
-
-
-def _set_session_sql_mode(dbapi_con, connection_rec, sql_mode=None):
-    """Set the sql_mode session variable.
-
-    MySQL supports several server modes. The default is None, but sessions
-    may choose to enable server modes like TRADITIONAL, ANSI,
-    several STRICT_* modes and others.
-
-    Note: passing in '' (empty string) for sql_mode clears
-    the SQL mode for the session, overriding a potentially set
-    server default.
-    """
-
-    cursor = dbapi_con.cursor()
-    cursor.execute("SET SESSION sql_mode = %s", [sql_mode])
-
-
-def _mysql_get_effective_sql_mode(engine):
-    """Returns the effective SQL mode for connections from the engine pool.
-
-    Returns ``None`` if the mode isn't available, otherwise returns the mode.
-
-    """
-    # Get the real effective SQL mode. Even when unset by
-    # our own config, the server may still be operating in a specific
-    # SQL mode as set by the server configuration.
-    # Also note that the checkout listener will be called on execute to
-    # set the mode if it's registered.
-    row = engine.execute("SHOW VARIABLES LIKE 'sql_mode'").fetchone()
-    if row is None:
-        return
-    return row[1]
-
-
-def _mysql_check_effective_sql_mode(engine):
-    """Logs a message based on the effective SQL mode for MySQL connections."""
-    realmode = _mysql_get_effective_sql_mode(engine)
-
-    if realmode is None:
-        LOG.warning(_LW('Unable to detect effective SQL mode'))
-        return
-
-    LOG.debug('MySQL server mode set to %s', realmode)
-    # 'TRADITIONAL' mode enables several other modes, so
-    # we need a substring match here
-    if not ('TRADITIONAL' in realmode.upper() or
-            'STRICT_ALL_TABLES' in realmode.upper()):
-        LOG.warning(_LW("MySQL SQL mode is '%s', "
-                        "consider enabling TRADITIONAL or STRICT_ALL_TABLES"),
-                    realmode)
-
-
-def _mysql_set_mode_callback(engine, sql_mode):
-    if sql_mode is not None:
-        mode_callback = functools.partial(_set_session_sql_mode,
-                                          sql_mode=sql_mode)
-        sqlalchemy.event.listen(engine, 'connect', mode_callback)
-    _mysql_check_effective_sql_mode(engine)
-
-
-def _is_db_connection_error(args):
-    """Return True if error in connecting to db."""
-    # NOTE(adam_g): This is currently MySQL specific and needs to be extended
-    #               to support Postgres and others.
-    # For the db2, the error code is -30081 since the db2 is still not ready
-    conn_err_codes = ('2002', '2003', '2006', '2013', '-30081')
-    for err_code in conn_err_codes:
-        if args.find(err_code) != -1:
-            return True
-    return False
-
-
-def _raise_if_db_connection_lost(error, engine):
-    # NOTE(vsergeyev): Function is_disconnect(e, connection, cursor)
-    #                  requires connection and cursor in incoming parameters,
-    #                  but we have no possibility to create connection if DB
-    #                  is not available, so in such case reconnect fails.
-    #                  But is_disconnect() ignores these parameters, so it
-    #                  makes sense to pass to function None as placeholder
-    #                  instead of connection and cursor.
-    if engine.dialect.is_disconnect(error, None, None):
-        raise exception.DBConnectionError(error)
+            logger.setLevel(logging.WARNING)
 
 
 def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
@@ -630,32 +358,53 @@ def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
                   thread_checkin=True):
     """Return a new SQLAlchemy engine."""
 
-    connection_dict = sqlalchemy.engine.url.make_url(sql_connection)
+    url = sqlalchemy.engine.url.make_url(sql_connection)
 
     engine_args = {
         "pool_recycle": idle_timeout,
         'convert_unicode': True,
     }
 
-    if connection_debug >= 0:
-        # Map SQL debug level to Python log level
-        logger = logging.getLogger('sqlalchemy.engine')
-        if connection_debug >= 100:
-            logger.setLevel(logging.DEBUG)
-        elif connection_debug >= 50:
-            logger.setLevel(logging.INFO)
-        else:
-            logger.setLevel(logging.WARNING)
+    _setup_logging(connection_debug)
 
-    if "sqlite" in connection_dict.drivername:
-        if sqlite_fk:
-            engine_args["listeners"] = [SqliteForeignKeysListener()]
-        engine_args["poolclass"] = NullPool
+    _init_connection_args(
+        url, engine_args,
+        sqlite_fk=sqlite_fk,
+        max_pool_size=max_pool_size,
+        max_overflow=max_overflow,
+        pool_timeout=pool_timeout
+    )
 
-        if sql_connection == "sqlite://":
-            engine_args["poolclass"] = StaticPool
-            engine_args["connect_args"] = {'check_same_thread': False}
-    else:
+    engine = sqlalchemy.create_engine(url, **engine_args)
+
+    _init_events(
+        engine,
+        mysql_sql_mode=mysql_sql_mode,
+        sqlite_synchronous=sqlite_synchronous,
+        sqlite_fk=sqlite_fk,
+        thread_checkin=thread_checkin,
+        connection_trace=connection_trace
+    )
+
+    # register alternate exception handler
+    exc_filters.register_engine(engine)
+
+    # register on begin handler
+    sqlalchemy.event.listen(engine, "begin", _begin_ping_listener)
+
+    # initial connect + test
+    _test_connection(engine, max_retries, retry_interval)
+
+    return engine
+
+
+@utils.dispatch_for_dialect('*', multiple=True)
+def _init_connection_args(
+    url, engine_args,
+    max_pool_size=None, max_overflow=None, pool_timeout=None, **kw):
+
+    pool_class = url.get_dialect().get_pool_class(url)
+    if issubclass(pool_class, pool.QueuePool):
         if max_pool_size is not None:
             engine_args['pool_size'] = max_pool_size
         if max_overflow is not None:
@@ -663,49 +412,127 @@ def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
         if pool_timeout is not None:
             engine_args['pool_timeout'] = pool_timeout
 
-    engine = sqlalchemy.create_engine(sql_connection, **engine_args)
+
+@_init_connection_args.dispatch_for("sqlite")
+def _init_connection_args(url, engine_args, **kw):
+    pool_class = url.get_dialect().get_pool_class(url)
+    # singletonthreadpool is used for :memory: connections;
+    # replace it with StaticPool.
+    if issubclass(pool_class, pool.SingletonThreadPool):
+        engine_args["poolclass"] = pool.StaticPool
+        engine_args["connect_args"] = {'check_same_thread': False}
+
+
+@_init_connection_args.dispatch_for("mysql+mysqlconnector")
+def _init_connection_args(url, engine_args, **kw):
+    # mysqlconnector engine (<1.0) incorrectly defaults to
+    # raise_on_warnings=True
+    #  https://bitbucket.org/zzzeek/sqlalchemy/issue/2515
+    if "raise_on_warnings" not in url.query:
+        engine_args['connect_args'] = {'raise_on_warnings': False}
+
+
+@utils.dispatch_for_dialect('*', multiple=True)
+def _init_events(engine, thread_checkin=True, connection_trace=False, **kw):
+    """Set up event listeners for all database backends."""
+
+    if connection_trace:
+        _add_trace_comments(engine)
 
     if thread_checkin:
         sqlalchemy.event.listen(engine, 'checkin', _thread_yield)
 
-    if engine.name in ('ibm_db_sa', 'mysql', 'postgresql'):
-        ping_callback = functools.partial(_ping_listener, engine)
-        sqlalchemy.event.listen(engine, 'checkout', ping_callback)
-        if engine.name == 'mysql':
-            if mysql_sql_mode:
-                _mysql_set_mode_callback(engine, mysql_sql_mode)
-    elif 'sqlite' in connection_dict.drivername:
+
+@_init_events.dispatch_for("mysql")
+def _init_events(engine, mysql_sql_mode=None, **kw):
+    """Set up event listeners for MySQL."""
+
+    if mysql_sql_mode is not None:
+        @sqlalchemy.event.listens_for(engine, "connect")
+        def _set_session_sql_mode(dbapi_con, connection_rec):
+            cursor = dbapi_con.cursor()
+            cursor.execute("SET SESSION sql_mode = %s", [mysql_sql_mode])
+
+    realmode = engine.execute("SHOW VARIABLES LIKE 'sql_mode'").fetchone()
+    if realmode is None:
+        LOG.warning(_LW('Unable to detect effective SQL mode'))
+    else:
+        realmode = realmode[1]
+        LOG.debug('MySQL server mode set to %s', realmode)
+        if 'TRADITIONAL' not in realmode.upper() and \
+            'STRICT_ALL_TABLES' not in realmode.upper():
+            LOG.warning(
+                _LW(
+                    "MySQL SQL mode is '%s', "
+                    "consider enabling TRADITIONAL or STRICT_ALL_TABLES"),
+                realmode)
+
+
+@_init_events.dispatch_for("sqlite")
+def _init_events(engine, sqlite_synchronous=True, sqlite_fk=False, **kw):
+    """Set up event listeners for SQLite.
+
+    This includes several settings made on connections as they are
+    created, as well as transactional control extensions.
+
+    """
+
+    def regexp(expr, item):
+        reg = re.compile(expr)
+        return reg.search(six.text_type(item)) is not None
+
+    @sqlalchemy.event.listens_for(engine, "connect")
+    def _sqlite_connect_events(dbapi_con, con_record):
+
+        # Add REGEXP functionality on SQLite connections
+        dbapi_con.create_function('regexp', 2, regexp)
+
         if not sqlite_synchronous:
-            sqlalchemy.event.listen(engine, 'connect',
-                                    _synchronous_switch_listener)
-        sqlalchemy.event.listen(engine, 'connect', _add_regexp_listener)
+            # Switch sqlite connections to non-synchronous mode
+            dbapi_con.execute("PRAGMA synchronous = OFF")
 
-    if connection_trace and engine.dialect.dbapi.__name__ == 'MySQLdb':
-        _patch_mysqldb_with_stacktrace_comments()
+        # Disable pysqlite's emitting of the BEGIN statement entirely.
+        # Also stops it from emitting COMMIT before any DDL.
+        # below, we emit BEGIN ourselves.
+        # see http://docs.sqlalchemy.org/en/rel_0_9/dialects/\
+        # sqlite.html#serializable-isolation-savepoints-transactional-ddl
+        dbapi_con.isolation_level = None
 
-    try:
-        engine.connect()
-    except sqla_exc.OperationalError as e:
-        if not _is_db_connection_error(e.args[0]):
-            raise
+        if sqlite_fk:
+            # Ensures that the foreign key constraints are enforced in SQLite.
+            dbapi_con.execute('pragma foreign_keys=ON')
 
-        remaining = max_retries
-        if remaining == -1:
-            remaining = 'infinite'
-        while True:
+    @sqlalchemy.event.listens_for(engine, "begin")
+    def _sqlite_emit_begin(conn):
+        # emit our own BEGIN, checking for existing
+        # transactional state
+        if 'in_transaction' not in conn.info:
+            conn.execute("BEGIN")
+            conn.info['in_transaction'] = True
+
+    @sqlalchemy.event.listens_for(engine, "rollback")
+    @sqlalchemy.event.listens_for(engine, "commit")
+    def _sqlite_end_transaction(conn):
+        # remove transactional marker
+        conn.info.pop('in_transaction', None)
+
+
+def _test_connection(engine, max_retries, retry_interval):
+    if max_retries == -1:
+        attempts = itertools.count()
+    else:
+        attempts = six.moves.range(max_retries)
+    de = None
+    for attempt in attempts:
+        try:
+            return exc_filters.handle_connect_error(engine)
+        except exception.DBConnectionError as de:
             msg = _LW('SQL connection failed. %s attempts left.')
-            LOG.warning(msg, remaining)
-            if remaining != 'infinite':
-                remaining -= 1
+            LOG.warning(msg, max_retries - attempt)
             time.sleep(retry_interval)
-            try:
-                engine.connect()
-                break
-            except sqla_exc.OperationalError as e:
-                if (remaining != 'infinite' and remaining == 0) or \
-                        not _is_db_connection_error(e.args[0]):
-                    raise
-    return engine
+    else:
+        if de is not None:
+            six.reraise(type(de), de)
 
 
 class Query(sqlalchemy.orm.query.Query):
@@ -719,17 +546,6 @@ class Query(sqlalchemy.orm.query.Query):
 
 class Session(sqlalchemy.orm.session.Session):
     """Custom Session class to avoid SqlAlchemy Session monkey patching."""
-    @_wrap_db_error
-    def query(self, *args, **kwargs):
-        return super(Session, self).query(*args, **kwargs)
-
-    @_wrap_db_error
-    def flush(self, *args, **kwargs):
-        return super(Session, self).flush(*args, **kwargs)
-
-    @_wrap_db_error
-    def execute(self, *args, **kwargs):
-        return super(Session, self).execute(*args, **kwargs)
 
 
 def get_maker(engine, autocommit=True, expire_on_commit=False):
@@ -741,47 +557,49 @@ def get_maker(engine, autocommit=True, expire_on_commit=False):
                                        query_cls=Query)
 
 
-def _patch_mysqldb_with_stacktrace_comments():
-    """Adds current stack trace as a comment in queries.
+def _add_trace_comments(engine):
+    """Add trace comments.
 
-    Patches MySQLdb.cursors.BaseCursor._do_query.
+    Augment statements with a trace of the immediate calling code
+    for a given statement.
     """
-    import MySQLdb.cursors
+
+    import os
+    import sys
     import traceback
+    target_paths = set([
+        os.path.dirname(sys.modules['oslo.db'].__file__),
+        os.path.dirname(sys.modules['sqlalchemy'].__file__)
+    ])
 
-    old_mysql_do_query = MySQLdb.cursors.BaseCursor._do_query
+    @sqlalchemy.event.listens_for(engine, "before_cursor_execute", retval=True)
+    def before_cursor_execute(conn, cursor, statement, parameters, context,
+                              executemany):
 
-    def _do_query(self, q):
-        stack = ''
-        for filename, line, method, function in traceback.extract_stack():
-            # exclude various common things from trace
-            if filename.endswith('session.py') and method == '_do_query':
-                continue
-            if filename.endswith('api.py') and method == 'wrapper':
-                continue
-            if filename.endswith('utils.py') and method == '_inner':
-                continue
-            if filename.endswith('exception.py') and method == '_wrap':
-                continue
-            # db/api is just a wrapper around db/sqlalchemy/api
-            if filename.endswith('db/api.py'):
-                continue
-            # only trace inside oslo
-            index = filename.rfind('oslo')
-            if index == -1:
-                continue
-            stack += "File:%s:%s Method:%s() Line:%s | " \
-                     % (filename[index:], line, method, function)
+        # NOTE(zzzeek) - if different steps per DB dialect are desirable
+        # here, switch out on engine.name for now.
+        stack = traceback.extract_stack()
+        our_line = None
+        for idx, (filename, line, method, function) in enumerate(stack):
+            for tgt in target_paths:
+                if filename.startswith(tgt):
+                    our_line = idx
+                    break
+            if our_line:
+                break
 
-        # strip trailing " | " from stack
-        if stack:
-            stack = stack[:-3]
-            qq = "%s /* %s */" % (q, stack)
-        else:
-            qq = q
-        old_mysql_do_query(self, qq)
+        if our_line:
+            trace = "; ".join(
+                "File: %s (%s) %s" % (
+                    line[0], line[1], line[2]
+                )
+                # include three lines of context.
+                for line in stack[our_line - 3:our_line]
 
-    setattr(MySQLdb.cursors.BaseCursor, '_do_query', _do_query)
+            )
+            statement = "%s  -- %s" % (statement, trace)
+
+        return statement, parameters
 
 
 class EngineFacade(object):

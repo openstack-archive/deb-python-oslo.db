@@ -1,5 +1,5 @@
-# coding: utf-8
-#
+# coding=utf-8
+
 # Copyright (c) 2013 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -46,8 +46,8 @@ from migrate.versioning import api as versioning_api
 from migrate.versioning.repository import Repository
 import sqlalchemy
 
+from oslo.db._i18n import _
 from oslo.db import exception
-from oslo.db.openstack.common.gettextutils import _
 
 
 def db_sync(engine, abs_path, version=None, init_version=0, sanity_check=True):
@@ -93,7 +93,7 @@ def _db_schema_sanity_check(engine):
         onlyutf8_sql = ('SELECT TABLE_NAME,TABLE_COLLATION '
                         'from information_schema.TABLES '
                         'where TABLE_SCHEMA=%s and '
-                        'TABLE_COLLATION NOT LIKE "%%utf8%%"')
+                        'TABLE_COLLATION NOT LIKE \'%%utf8%%\'')
 
         # NOTE(morganfainberg): exclude the sqlalchemy-migrate and alembic
         # versioning tables from the tables we need to verify utf8 status on.

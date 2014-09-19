@@ -13,7 +13,7 @@
 import logging
 import os
 
-from oslo.db.openstack.common.gettextutils import _LE
+from oslo.db._i18n import _LE
 from oslo.db.sqlalchemy import migration
 from oslo.db.sqlalchemy.migration_cli import ext_base
 from oslo.db.sqlalchemy import session as db_session
@@ -49,7 +49,7 @@ class MigrateExtension(ext_base.MigrationExtensionBase):
 
     def downgrade(self, version):
         try:
-            #version for migrate should be valid int - else skip
+            # version for migrate should be valid int - else skip
             if version in ('base', None):
                 version = self.init_version
             version = int(version)

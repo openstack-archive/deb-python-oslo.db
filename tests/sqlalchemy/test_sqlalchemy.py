@@ -1,4 +1,4 @@
-# encoding=UTF8
+# coding=utf-8
 
 # Copyright (c) 2012 Rackspace Hosting
 # All Rights Reserved.
@@ -16,21 +16,20 @@
 #    under the License.
 
 """Unit tests for SQLAlchemy specific code."""
-import logging
-from oslo.config import cfg
 
-import _mysql_exceptions
+import logging
+
 import fixtures
 import mock
+from oslo.config import cfg
 from oslotest import base as oslo_test
 import sqlalchemy
-from sqlalchemy import Column, MetaData, Table, UniqueConstraint
-from sqlalchemy import DateTime, Integer, String
-from sqlalchemy import exc as sqla_exc
-from sqlalchemy.exc import DataError
+from sqlalchemy import Column, MetaData, Table
+from sqlalchemy.engine import url
+from sqlalchemy import Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 
-from oslo.db import exception as db_exc
+from oslo.db import exception
 from oslo.db import options as db_options
 from oslo.db.sqlalchemy import models
 from oslo.db.sqlalchemy import session
@@ -39,90 +38,6 @@ from oslo.db.sqlalchemy import test_base
 
 BASE = declarative_base()
 _TABLE_NAME = '__tmp__test__tmp__'
-
-
-class TmpTable(BASE, models.ModelBase):
-    __tablename__ = _TABLE_NAME
-    id = Column(Integer, primary_key=True)
-    foo = Column(Integer)
-
-
-class SessionErrorWrapperTestCase(test_base.DbTestCase):
-    def setUp(self):
-        super(SessionErrorWrapperTestCase, self).setUp()
-        meta = MetaData()
-        meta.bind = self.engine
-        test_table = Table(_TABLE_NAME, meta,
-                           Column('id', Integer, primary_key=True,
-                                  nullable=False),
-                           Column('deleted', Integer, default=0),
-                           Column('deleted_at', DateTime),
-                           Column('updated_at', DateTime),
-                           Column('created_at', DateTime),
-                           Column('foo', Integer),
-                           UniqueConstraint('foo', name='uniq_foo'))
-        test_table.create()
-        self.addCleanup(test_table.drop)
-
-    def test_flush_wrapper(self):
-        _session = self.sessionmaker()
-
-        tbl = TmpTable()
-        tbl.update({'foo': 10})
-        tbl.save(_session)
-
-        tbl2 = TmpTable()
-        tbl2.update({'foo': 10})
-        self.assertRaises(db_exc.DBDuplicateEntry, tbl2.save, _session)
-
-    def test_execute_wrapper(self):
-        _session = self.sessionmaker()
-        with _session.begin():
-            for i in [10, 20]:
-                tbl = TmpTable()
-                tbl.update({'foo': i})
-                tbl.save(session=_session)
-
-            method = _session.query(TmpTable).\
-                filter_by(foo=10).\
-                update
-            self.assertRaises(db_exc.DBDuplicateEntry,
-                              method, {'foo': 20})
-
-    def test_ibm_db_sa_raise_if_duplicate_entry_error_duplicate(self):
-        # Tests that the session._raise_if_duplicate_entry_error method
-        # translates the duplicate entry integrity error for the DB2 engine.
-        statement = ('INSERT INTO key_pairs (created_at, updated_at, '
-                     'deleted_at, deleted, name, user_id, fingerprint) VALUES '
-                     '(?, ?, ?, ?, ?, ?, ?)')
-        params = ['20130918001123627099', None, None, 0, 'keypair-23474772',
-                  '974a7c9ffde6419f9811fcf94a917f47',
-                  '7d:2c:58:7f:97:66:14:3f:27:c7:09:3c:26:95:66:4d']
-        orig = sqla_exc.SQLAlchemyError(
-            'SQL0803N  One or more values in the INSERT statement, UPDATE '
-            'statement, or foreign key update caused by a DELETE statement are'
-            ' not valid because the primary key, unique constraint or unique '
-            'index identified by "2" constrains table "NOVA.KEY_PAIRS" from '
-            'having duplicate values for the index key.')
-        integrity_error = sqla_exc.IntegrityError(statement, params, orig)
-        self.assertRaises(db_exc.DBDuplicateEntry,
-                          session._raise_if_duplicate_entry_error,
-                          integrity_error, 'ibm_db_sa')
-
-    def test_ibm_db_sa_raise_if_duplicate_entry_error_no_match(self):
-        # Tests that the session._raise_if_duplicate_entry_error method
-        # does not raise a DBDuplicateEntry exception when it's not a matching
-        # integrity error.
-        statement = ('ALTER TABLE instance_types ADD CONSTRAINT '
-                     'uniq_name_x_deleted UNIQUE (name, deleted)')
-        params = None
-        orig = sqla_exc.SQLAlchemyError(
-            'SQL0542N  The column named "NAME" cannot be a column of a '
-            'primary key or unique key constraint because it can contain null '
-            'values.')
-        integrity_error = sqla_exc.IntegrityError(statement, params, orig)
-        session._raise_if_duplicate_entry_error(integrity_error, 'ibm_db_sa')
-
 
 _REGEXP_TABLE_NAME = _TABLE_NAME + "regexp"
 
@@ -171,6 +86,87 @@ class RegexpFilterTestCase(test_base.DbTestCase):
         self._test_regexp_filter(u'♦', [])
 
 
+class SQLiteSavepointTest(test_base.DbTestCase):
+    def setUp(self):
+        super(SQLiteSavepointTest, self).setUp()
+        meta = MetaData()
+        self.test_table = Table(
+            "test_table", meta,
+            Column('id', Integer, primary_key=True),
+            Column('data', String(10)))
+        self.test_table.create(self.engine)
+        self.addCleanup(self.test_table.drop, self.engine)
+
+    def test_plain_transaction(self):
+        conn = self.engine.connect()
+        trans = conn.begin()
+        conn.execute(
+            self.test_table.insert(),
+            {'data': 'data 1'}
+        )
+        self.assertEqual(
+            [(1, 'data 1')],
+            self.engine.execute(
+                self.test_table.select().
+                order_by(self.test_table.c.id)
+            ).fetchall()
+        )
+        trans.rollback()
+        self.assertEqual(
+            0,
+            self.engine.scalar(self.test_table.count())
+        )
+
+    def test_savepoint_middle(self):
+        with self.engine.begin() as conn:
+            conn.execute(
+                self.test_table.insert(),
+                {'data': 'data 1'}
+            )
+
+            savepoint = conn.begin_nested()
+            conn.execute(
+                self.test_table.insert(),
+                {'data': 'data 2'}
+            )
+            savepoint.rollback()
+
+            conn.execute(
+                self.test_table.insert(),
+                {'data': 'data 3'}
+            )
+
+        self.assertEqual(
+            [(1, 'data 1'), (2, 'data 3')],
+            self.engine.execute(
+                self.test_table.select().
+                order_by(self.test_table.c.id)
+            ).fetchall()
+        )
+
+    def test_savepoint_beginning(self):
+        with self.engine.begin() as conn:
+            savepoint = conn.begin_nested()
+            conn.execute(
+                self.test_table.insert(),
+                {'data': 'data 1'}
+            )
+            savepoint.rollback()
+
+            conn.execute(
+                self.test_table.insert(),
+                {'data': 'data 2'}
+            )
+
+        self.assertEqual(
+            [(1, 'data 2')],
+            self.engine.execute(
+                self.test_table.select().
+                order_by(self.test_table.c.id)
+            ).fetchall()
+        )
+
+
 class FakeDBAPIConnection():
     def cursor(self):
         return FakeCursor()
@@ -211,163 +207,6 @@ class FakeDB2Engine(object):
 
     def dispose(self):
         pass
-
-
-class TestDBDisconnected(oslo_test.BaseTestCase):
-
-    def _test_ping_listener_disconnected(self, connection):
-        engine_args = {
-            'pool_recycle': 3600,
-            'echo': False,
-            'convert_unicode': True}
-
-        engine = sqlalchemy.create_engine(connection, **engine_args)
-        with mock.patch.object(engine, 'dispose') as dispose_mock:
-            self.assertRaises(sqlalchemy.exc.DisconnectionError,
-                              session._ping_listener, engine,
-                              FakeDBAPIConnection(), FakeConnectionRec(),
-                              FakeConnectionProxy())
-            dispose_mock.assert_called_once_with()
-
-    def test_mysql_ping_listener_disconnected(self):
-        def fake_execute(sql):
-            raise _mysql_exceptions.OperationalError(self.mysql_error,
-                                                     ('MySQL server has '
-                                                      'gone away'))
-        with mock.patch.object(FakeCursor, 'execute',
-                               side_effect=fake_execute):
-            connection = 'mysql://root:password@fakehost/fakedb?charset=utf8'
-            for code in [2006, 2013, 2014, 2045, 2055]:
-                self.mysql_error = code
-                self._test_ping_listener_disconnected(connection)
-
-    def test_db2_ping_listener_disconnected(self):
-
-        def fake_execute(sql):
-            raise OperationalError('SQL30081N: DB2 Server '
-                                   'connection is no longer active')
-        with mock.patch.object(FakeCursor, 'execute',
-                               side_effect=fake_execute):
-            # TODO(dperaza): Need a fake engine for db2 since ibm_db_sa is not
-            # in global requirements. Change this code to use real IBM db2
-            # engine as soon as ibm_db_sa is included in global-requirements
-            # under openstack/requirements project.
-            fake_create_engine = lambda *args, **kargs: FakeDB2Engine()
-            with mock.patch.object(sqlalchemy, 'create_engine',
-                                   side_effect=fake_create_engine):
-                connection = ('ibm_db_sa://db2inst1:openstack@fakehost:50000'
-                              '/fakedab')
-                self._test_ping_listener_disconnected(connection)
-
-
-class TestDBDeadlocked(test_base.DbTestCase):
-
-    def test_mysql_deadlock(self):
-        statement = ('SELECT quota_usages.created_at AS '
-                     'quota_usages_created_at, quota_usages.updated_at AS '
-                     'quota_usages_updated_at, quota_usages.deleted_at AS '
-                     'quota_usages_deleted_at, quota_usages.deleted AS '
-                     'quota_usages_deleted, quota_usages.id AS '
-                     'quota_usages_id, quota_usages.project_id AS '
-                     'quota_usages_project_id, quota_usages.user_id AS '
-                     'quota_usages_user_id, quota_usages.resource AS '
-                     'quota_usages_resource, quota_usages.in_use AS '
-                     'quota_usages_in_use, quota_usages.reserved AS '
-                     'quota_usages_reserved, quota_usages.until_refresh AS '
-                     'quota_usages_until_refresh \nFROM quota_usages \n'
-                     'WHERE quota_usages.deleted = %(deleted_1)s AND '
-                     'quota_usages.project_id = %(project_id_1)s AND '
-                     '(quota_usages.user_id = %(user_id_1)s OR '
-                     'quota_usages.user_id IS NULL) FOR UPDATE')
-        params = {'project_id_1': u'8891d4478bbf48ad992f050cdf55e9b5',
-                  'user_id_1': u'22b6a9fe91b349639ce39146274a25ba',
-                  'deleted_1': 0}
-        orig = sqla_exc.SQLAlchemyError("(1213, 'Deadlock found when trying "
-                                        "to get lock; try restarting "
-                                        "transaction')")
-        deadlock_error = sqla_exc.OperationalError(statement, params, orig)
-        self.assertRaises(db_exc.DBDeadlock,
-                          session._raise_if_deadlock_error,
-                          deadlock_error,
-                          'mysql')
-
-    def test_postgresql_deadlock(self):
-        statement = ('SELECT quota_usages.created_at AS '
-                     'quota_usages_created_at, quota_usages.updated_at AS '
-                     'quota_usages_updated_at, quota_usages.deleted_at AS '
-                     'quota_usages_deleted_at, quota_usages.deleted AS '
-                     'quota_usages_deleted, quota_usages.id AS '
-                     'quota_usages_id, quota_usages.project_id AS '
-                     'quota_usages_project_id, quota_usages.user_id AS '
-                     'quota_usages_user_id, quota_usages.resource AS '
-                     'quota_usages_resource, quota_usages.in_use AS '
-                     'quota_usages_in_use, quota_usages.reserved AS '
-                     'quota_usages_reserved, quota_usages.until_refresh AS '
-                     'quota_usages_until_refresh \nFROM quota_usages \n'
-                     'WHERE quota_usages.deleted = %(deleted_1)s AND '
-                     'quota_usages.project_id = %(project_id_1)s AND '
-                     '(quota_usages.user_id = %(user_id_1)s OR '
-                     'quota_usages.user_id IS NULL) FOR UPDATE')
-        params = {'project_id_1': u'8891d4478bbf48ad992f050cdf55e9b5',
-                  'user_id_1': u'22b6a9fe91b349639ce39146274a25ba',
-                  'deleted_1': 0}
-        orig = sqla_exc.SQLAlchemyError("(TransactionRollbackError) "
-                                        "deadlock detected")
-        deadlock_error = sqla_exc.DBAPIError(statement, params, orig)
-        self.assertRaises(db_exc.DBDeadlock,
-                          session._raise_if_deadlock_error,
-                          deadlock_error,
-                          'postgresql')
-
-    def test_mysql_fail_without_deadlock(self):
-        statement = ('SELECT quota_usages.created_at AS '
-                     'quota_usages_created_at, quota_usages.updated_at AS '
-                     'quota_usages_updated_at, quota_usages.deleted_at AS '
-                     'quota_usages_deleted_at, quota_usages.deleted AS '
-                     'quota_usages_deleted, quota_usages.id AS '
-                     'quota_usages_id, quota_usages.project_id AS '
-                     'quota_usages_project_id, quota_usages.user_id AS '
-                     'quota_usages_user_id, quota_usages.resource AS '
-                     'quota_usages_resource, quota_usages.in_use AS '
-                     'quota_usages_in_use, quota_usages.reserved AS '
-                     'quota_usages_reserved, quota_usages.until_refresh AS '
-                     'quota_usages_until_refresh \nFROM quota_usages \n'
-                     'WHERE quota_usages.deleted = %(deleted_1)s AND '
-                     'quota_usages.project_id = %(project_id_1)s AND '
-                     '(quota_usages.user_id = %(user_id_1)s OR '
-                     'quota_usages.user_id IS NULL) FOR UPDATE')
-        params = {'project_id_1': u'8891d4478bbf48ad992f050cdf55e9b5',
-                  'user_id_1': u'22b6a9fe91b349639ce39146274a25ba',
-                  'deleted_1': 0}
-        orig = sqla_exc.SQLAlchemyError('Other error occurred.')
-        dbapi_error = sqla_exc.DBAPIError(statement, params, orig)
-        self.assertIsNone(session._raise_if_deadlock_error(dbapi_error,
-                                                           'mysql'))
-
-    def test_postgresql_fail_without_deadlock(self):
-        statement = ('SELECT quota_usages.created_at AS '
-                     'quota_usages_created_at, quota_usages.updated_at AS '
-                     'quota_usages_updated_at, quota_usages.deleted_at AS '
-                     'quota_usages_deleted_at, quota_usages.deleted AS '
-                     'quota_usages_deleted, quota_usages.id AS '
-                     'quota_usages_id, quota_usages.project_id AS '
-                     'quota_usages_project_id, quota_usages.user_id AS '
-                     'quota_usages_user_id, quota_usages.resource AS '
-                     'quota_usages_resource, quota_usages.in_use AS '
-                     'quota_usages_in_use, quota_usages.reserved AS '
-                     'quota_usages_reserved, quota_usages.until_refresh AS '
-                     'quota_usages_until_refresh \nFROM quota_usages \n'
-                     'WHERE quota_usages.deleted = %(deleted_1)s AND '
-                     'quota_usages.project_id = %(project_id_1)s AND '
-                     '(quota_usages.user_id = %(user_id_1)s OR '
-                     'quota_usages.user_id IS NULL) FOR UPDATE')
-        params = {'project_id_1': u'8891d4478bbf48ad992f050cdf55e9b5',
-                  'user_id_1': u'22b6a9fe91b349639ce39146274a25ba',
-                  'deleted_1': 0}
-        orig = sqla_exc.SQLAlchemyError('Other error occurred.')
-        dbapi_error = sqla_exc.DBAPIError(statement, params, orig)
-        self.assertIsNone(session._raise_if_deadlock_error(dbapi_error,
-                                                           'postgresql'))
 
 
 class MySQLModeTestCase(test_base.MySQLOpportunisticTestCase):
@@ -421,12 +260,13 @@ class MySQLStrictAllTablesModeTestCase(MySQLModeTestCase):
         value = 'a' * 512
         # String is too long.
         # With STRICT_ALL_TABLES or TRADITIONAL mode set, this is an error.
-        self.assertRaises(DataError,
+        self.assertRaises(exception.DBError,
                           self._test_string_too_long, value)
 
 
 class MySQLTraditionalModeTestCase(MySQLStrictAllTablesModeTestCase):
     """Test data integrity enforcement in MySQL TRADITIONAL mode.
+
     Since TRADITIONAL includes STRICT_ALL_TABLES, this inherits all
     STRICT_ALL_TABLES mode tests.
     """
@@ -537,161 +377,250 @@ class EngineFacadeTestCase(oslo_test.BaseTestCase):
         self.assertEqual(master_path, str(slave_session.bind.url))
 
 
-class MysqlSetCallbackTest(oslo_test.BaseTestCase):
+class SQLiteConnectTest(oslo_test.BaseTestCase):
 
-    class FakeCursor(object):
-        def __init__(self, execs):
-            self._execs = execs
+    def _fixture(self, **kw):
+        return session.create_engine("sqlite://", **kw)
 
-        def execute(self, sql, arg):
-            self._execs.append(sql % arg)
+    def test_sqlite_fk_listener(self):
+        engine = self._fixture(sqlite_fk=True)
+        self.assertEqual(
+            engine.scalar("pragma foreign_keys"),
+            1
+        )
 
-    class FakeDbapiCon(object):
-        def __init__(self, execs):
-            self._execs = execs
+        engine = self._fixture(sqlite_fk=False)
 
-        def cursor(self):
-            return MysqlSetCallbackTest.FakeCursor(self._execs)
+        self.assertEqual(
+            engine.scalar("pragma foreign_keys"),
+            0
+        )
 
-    class FakeResultSet(object):
-        def __init__(self, realmode):
-            self._realmode = realmode
+    def test_sqlite_synchronous_listener(self):
+        engine = self._fixture()
 
-        def fetchone(self):
-            return ['ignored', self._realmode]
+        # "The default setting is synchronous=FULL." (e.g. 2)
+        # http://www.sqlite.org/pragma.html#pragma_synchronous
+        self.assertEqual(
+            engine.scalar("pragma synchronous"),
+            2
+        )
 
-    class FakeEngine(object):
-        def __init__(self, realmode=None):
-            self._cbs = {}
-            self._execs = []
-            self._realmode = realmode
-            self._connected = False
+        engine = self._fixture(sqlite_synchronous=False)
 
-        def set_callback(self, name, cb):
-            self._cbs[name] = cb
+        self.assertEqual(
+            engine.scalar("pragma synchronous"),
+            0
+        )
 
-        def connect(self, **kwargs):
-            cb = self._cbs.get('connect', lambda *x, **y: None)
-            dbapi_con = MysqlSetCallbackTest.FakeDbapiCon(self._execs)
-            connection_rec = None  # Not used.
-            cb(dbapi_con, connection_rec)
 
-        def execute(self, sql):
-            if not self._connected:
-                self.connect()
-                self._connected = True
-            self._execs.append(sql)
-            return MysqlSetCallbackTest.FakeResultSet(self._realmode)
+class MysqlConnectTest(test_base.MySQLOpportunisticTestCase):
 
-    def stub_listen(engine, name, cb):
-        engine.set_callback(name, cb)
+    def _fixture(self, sql_mode):
+        return session.create_engine(self.engine.url, mysql_sql_mode=sql_mode)
 
-    @mock.patch.object(sqlalchemy.event, 'listen', side_effect=stub_listen)
-    def _call_set_callback(self, listen_mock, sql_mode=None, realmode=None):
-        engine = self.FakeEngine(realmode=realmode)
-
-        self.stream = self.useFixture(fixtures.FakeLogger(
-            format="%(levelname)8s [%(name)s] %(message)s",
-            level=logging.DEBUG,
-            nuke_handlers=True
-        ))
-
-        session._mysql_set_mode_callback(engine, sql_mode=sql_mode)
-        return engine
+    def _assert_sql_mode(self, engine, sql_mode_present, sql_mode_non_present):
+        mode = engine.execute("SHOW VARIABLES LIKE 'sql_mode'").fetchone()[1]
+        self.assertTrue(
+            sql_mode_present in mode
+        )
+        if sql_mode_non_present:
+            self.assertTrue(
+                sql_mode_non_present not in mode
+            )
 
     def test_set_mode_traditional(self):
-        # If _mysql_set_mode_callback is called with an sql_mode, then the SQL
-        # mode is set on the connection.
-
-        engine = self._call_set_callback(sql_mode='TRADITIONAL')
-
-        exp_calls = [
-            "SET SESSION sql_mode = ['TRADITIONAL']",
-            "SHOW VARIABLES LIKE 'sql_mode'"
-        ]
-        self.assertEqual(exp_calls, engine._execs)
+        engine = self._fixture(sql_mode='TRADITIONAL')
+        self._assert_sql_mode(engine, "TRADITIONAL", "ANSI")
 
     def test_set_mode_ansi(self):
-        # If _mysql_set_mode_callback is called with an sql_mode, then the SQL
-        # mode is set on the connection.
-
-        engine = self._call_set_callback(sql_mode='ANSI')
-
-        exp_calls = [
-            "SET SESSION sql_mode = ['ANSI']",
-            "SHOW VARIABLES LIKE 'sql_mode'"
-        ]
-        self.assertEqual(exp_calls, engine._execs)
+        engine = self._fixture(sql_mode='ANSI')
+        self._assert_sql_mode(engine, "ANSI", "TRADITIONAL")
 
     def test_set_mode_no_mode(self):
         # If _mysql_set_mode_callback is called with sql_mode=None, then
         # the SQL mode is NOT set on the connection.
 
-        engine = self._call_set_callback()
+        expected = self.engine.execute(
+            "SHOW VARIABLES LIKE 'sql_mode'").fetchone()[1]
 
-        exp_calls = [
-            "SHOW VARIABLES LIKE 'sql_mode'"
-        ]
-        self.assertEqual(exp_calls, engine._execs)
+        engine = self._fixture(sql_mode=None)
+        self._assert_sql_mode(engine, expected, None)
 
     def test_fail_detect_mode(self):
         # If "SHOW VARIABLES LIKE 'sql_mode'" results in no row, then
         # we get a log indicating can't detect the mode.
 
-        self._call_set_callback()
+        log = self.useFixture(fixtures.FakeLogger(level=logging.WARN))
+
+        engine = self._fixture(sql_mode=None)
+
+        @sqlalchemy.event.listens_for(
+            engine, "before_cursor_execute", retval=True)
+        def replace_stmt(
+            conn, cursor, statement, parameters,
+            context, executemany):
+            if "SHOW VARIABLES LIKE 'sql_mode'" in statement:
+                statement = "SHOW VARIABLES LIKE 'i_dont_exist'"
+            return statement, parameters
+
+        session._init_events.dispatch_on_drivername("mysql")(engine)
 
         self.assertIn('Unable to detect effective SQL mode',
-                      self.stream.output)
+                      log.output)
 
     def test_logs_real_mode(self):
         # If "SHOW VARIABLES LIKE 'sql_mode'" results in a value, then
         # we get a log with the value.
 
-        self._call_set_callback(realmode='SOMETHING')
+        log = self.useFixture(fixtures.FakeLogger(level=logging.DEBUG))
 
-        self.assertIn('MySQL server mode set to SOMETHING',
-                      self.stream.output)
+        engine = self._fixture(sql_mode='TRADITIONAL')
+
+        actual_mode = engine.execute(
+            "SHOW VARIABLES LIKE 'sql_mode'").fetchone()[1]
+
+        self.assertIn('MySQL server mode set to %s' % actual_mode,
+                      log.output)
 
     def test_warning_when_not_traditional(self):
         # If "SHOW VARIABLES LIKE 'sql_mode'" results in a value that doesn't
         # include 'TRADITIONAL', then a warning is logged.
 
-        self._call_set_callback(realmode='NOT_TRADIT')
+        log = self.useFixture(fixtures.FakeLogger(level=logging.WARN))
+        self._fixture(sql_mode='ANSI')
 
         self.assertIn("consider enabling TRADITIONAL or STRICT_ALL_TABLES",
-                      self.stream.output)
+                      log.output)
 
     def test_no_warning_when_traditional(self):
         # If "SHOW VARIABLES LIKE 'sql_mode'" results in a value that includes
         # 'TRADITIONAL', then no warning is logged.
 
-        self._call_set_callback(realmode='TRADITIONAL')
+        log = self.useFixture(fixtures.FakeLogger(level=logging.WARN))
+        self._fixture(sql_mode='TRADITIONAL')
 
         self.assertNotIn("consider enabling TRADITIONAL or STRICT_ALL_TABLES",
-                         self.stream.output)
+                         log.output)
 
     def test_no_warning_when_strict_all_tables(self):
         # If "SHOW VARIABLES LIKE 'sql_mode'" results in a value that includes
         # 'STRICT_ALL_TABLES', then no warning is logged.
 
-        self._call_set_callback(realmode='STRICT_ALL_TABLES')
+        log = self.useFixture(fixtures.FakeLogger(level=logging.WARN))
+        self._fixture(sql_mode='TRADITIONAL')
 
         self.assertNotIn("consider enabling TRADITIONAL or STRICT_ALL_TABLES",
-                         self.stream.output)
+                         log.output)
 
-    def test_multiple_executes(self):
-        # We should only set the sql_mode on a connection once.
 
-        engine = self._call_set_callback(sql_mode='TRADITIONAL',
-                                         realmode='TRADITIONAL')
+class CreateEngineTest(oslo_test.BaseTestCase):
+    """Test that dialect-specific arguments/ listeners are set up correctly.
 
-        engine.execute('SELECT * FROM foo')
-        engine.execute('SELECT * FROM bar')
+    """
 
-        exp_calls = [
-            "SET SESSION sql_mode = ['TRADITIONAL']",
-            "SHOW VARIABLES LIKE 'sql_mode'",
-            "SELECT * FROM foo",
-            "SELECT * FROM bar",
-        ]
-        self.assertEqual(exp_calls, engine._execs)
+    def test_queuepool_args(self):
+        args = {}
+        session._init_connection_args(
+            url.make_url("mysql://u:p@host/test"), args,
+            max_pool_size=10, max_overflow=10)
+        self.assertEqual(args['pool_size'], 10)
+        self.assertEqual(args['max_overflow'], 10)
+
+    def test_sqlite_memory_pool_args(self):
+        for _url in ("sqlite://", "sqlite:///:memory:"):
+            args = {}
+            session._init_connection_args(
+                url.make_url(_url), args,
+                max_pool_size=10, max_overflow=10)
+
+            # queuepool arguments are not peresnet
+            self.assertTrue(
+                'pool_size' not in args)
+            self.assertTrue(
+                'max_overflow' not in args)
+
+            self.assertEqual(
+                args['connect_args'],
+                {'check_same_thread': False}
+            )
+
+            # due to memory connection
+            self.assertTrue('poolclass' in args)
+
+    def test_sqlite_file_pool_args(self):
+        args = {}
+        session._init_connection_args(
+            url.make_url("sqlite:///somefile.db"), args,
+            max_pool_size=10, max_overflow=10)
+
+        # queuepool arguments are not peresnet
+        self.assertTrue('pool_size' not in args)
+        self.assertTrue(
+            'max_overflow' not in args)
+
+        self.assertTrue(
+            'connect_args' not in args
+        )
+
+        # NullPool is the default for file based connections,
+        # no need to specify this
+        self.assertTrue('poolclass' not in args)
+
+    def test_mysql_connect_args_default(self):
+        args = {}
+        session._init_connection_args(
+            url.make_url("mysql+mysqldb://u:p@host/test"), args)
+        self.assertTrue(
+            'connect_args' not in args
+        )
+
+    def test_mysqlconnector_raise_on_warnings_default(self):
+        args = {}
+        session._init_connection_args(
+            url.make_url("mysql+mysqlconnector://u:p@host/test"),
+            args)
+        self.assertEqual(
+            args,
+            {'connect_args': {'raise_on_warnings': False}}
+        )
+
+    def test_mysqlconnector_raise_on_warnings_override(self):
+        args = {}
+        session._init_connection_args(
+            url.make_url(
+                "mysql+mysqlconnector://u:p@host/test"
+                "?raise_on_warnings=true"),
+            args
+        )
+
+        self.assertTrue(
+            'connect_args' not in args
+        )
+
+    def test_thread_checkin(self):
+        with mock.patch("sqlalchemy.event.listens_for"):
+            with mock.patch("sqlalchemy.event.listen") as listen_evt:
+                session._init_events.dispatch_on_drivername(
+                    "sqlite")(mock.Mock())
+
+        self.assertEqual(
+            listen_evt.mock_calls[0][1][-1],
+            session._thread_yield
+        )
+
+
+class PatchStacktraceTest(test_base.DbTestCase):
+
+    def test_trace(self):
+        engine = self.engine
+        engine.connect()
+        with mock.patch.object(engine.dialect, "do_execute") as mock_exec:
+            session._add_trace_comments(engine)
+
+            engine.execute("select * from table")
+
+        call = mock_exec.mock_calls[0]
+
+        # we're the caller, see that we're in there
+        self.assertTrue("tests/sqlalchemy/test_sqlalchemy.py" in call[1][1])

@@ -1,12 +1,13 @@
-========
-Usage
-========
+=======
+ Usage
+=======
 
-To use oslo.db in a project::
+To use oslo.db in a project:
 
-* Session Handling
-  
-  .. code:: python
+Session Handling
+================
+
+.. code:: python
 
     from oslo.config import cfg
     from oslo.db.sqlalchemy import session as db_session
@@ -28,11 +29,12 @@ To use oslo.db in a project::
         return facade.get_session(**kwargs)
 
 
-* Base class for models usage
+Base class for models usage
+===========================
 
-  .. code:: python
+.. code:: python
 
-	from oslo.db import models
+    from oslo.db import models
 
 
     class ProjectSomething(models.TimestampMixin,
@@ -41,9 +43,10 @@ To use oslo.db in a project::
         ...
 
 
-* DB API backend support 
+DB API backend support
+======================
 
-  .. code:: python
+.. code:: python
 
     from oslo.config import cfg
     from oslo.db import api as db_api
@@ -62,4 +65,3 @@ To use oslo.db in a project::
     # DB-API method
     def do_something(somethind_id):
         return IMPL.do_something(somethind_id)
-
