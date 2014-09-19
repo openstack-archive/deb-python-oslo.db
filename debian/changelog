@@ -1,3 +1,10 @@
+python-oslo.db (0.5.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Uploading to Experimental before Jessie freeze.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 19 Sep 2014 22:34:16 +0800
+
 python-oslo.db (0.3.0-1) unstable; urgency=medium
 
   * New upstream release.
