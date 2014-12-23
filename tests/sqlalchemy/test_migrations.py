@@ -191,6 +191,10 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
             sa.Column('defaulttest', sa.Integer, server_default='5'),
             sa.Column('defaulttest2', sa.String(8), server_default=''),
             sa.Column('defaulttest3', sa.String(5), server_default="test"),
+            sa.Column('defaulttest4', sa.Enum('first', 'second',
+                                              name='testenum'),
+                      server_default="first"),
+            sa.Column('fk_check', sa.String(36), nullable=False),
             sa.UniqueConstraint('spam', 'eggs', name='uniq_cons'),
         )
 
@@ -207,6 +211,7 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
             eggs = sa.Column('eggs', sa.DateTime)
             foo = sa.Column('foo', sa.Boolean,
                             server_default=sa.sql.expression.true())
+            fk_check = sa.Column('fk_check', sa.String(36), nullable=False)
             bool_wo_default = sa.Column('bool_wo_default', sa.Boolean)
             defaulttest = sa.Column('defaulttest',
                                     sa.Integer, server_default='5')
@@ -214,6 +219,9 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
                                      server_default='')
             defaulttest3 = sa.Column('defaulttest3', sa.String(5),
                                      server_default="test")
+            defaulttest4 = sa.Column('defaulttest4', sa.Enum('first', 'second',
+                                                             name='testenum'),
+                                     server_default="first")
             bar = sa.Column('bar', sa.Numeric(10, 5))
 
         class ModelThatShouldNotBeCompared(BASE):
@@ -232,10 +240,19 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
         self.metadata_migrations.create_all(bind=engine)
 
     def include_object(self, object_, name, type_, reflected, compare_to):
-        return type_ == 'table' and name == 'testtbl' or type_ == 'column'
+        if type_ == 'table':
+            return name == 'testtbl'
+        else:
+            return True
 
     def _test_models_not_sync(self):
         self.metadata_migrations.clear()
+        sa.Table(
+            'table', self.metadata_migrations,
+            sa.Column('fk_check', sa.String(36), nullable=False),
+            sa.PrimaryKeyConstraint('fk_check'),
+            mysql_engine='InnoDB'
+        )
         sa.Table(
             'testtbl', self.metadata_migrations,
             sa.Column('id', sa.Integer, primary_key=True),
@@ -248,7 +265,13 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
             sa.Column('defaulttest', sa.Integer, server_default='7'),
             sa.Column('defaulttest2', sa.String(8), server_default=''),
             sa.Column('defaulttest3', sa.String(5), server_default="fake"),
+            sa.Column('defaulttest4',
+                      sa.Enum('first', 'second', name='testenum'),
+                      server_default="first"),
+            sa.Column('fk_check', sa.String(36), nullable=False),
             sa.UniqueConstraint('spam', 'foo', name='uniq_cons'),
+            sa.ForeignKeyConstraint(['fk_check'], ['table.fk_check']),
+            mysql_engine='InnoDB'
         )
 
         msg = six.text_type(self.assertRaises(AssertionError,
@@ -261,12 +284,13 @@ class ModelsMigrationSyncMixin(test.BaseTestCase):
             'Models and migration scripts aren\'t in sync:'))
         self.assertIn('testtbl', msg)
         self.assertIn('spam', msg)
-        self.assertIn('eggs', msg)
+        self.assertIn('eggs', msg)  # test that the unique constraint is added
         self.assertIn('foo', msg)
         self.assertIn('bar', msg)
         self.assertIn('bool_wo_default', msg)
         self.assertIn('defaulttest', msg)
         self.assertIn('defaulttest3', msg)
+        self.assertIn('drop_key', msg)
 
 
 class ModelsMigrationsSyncMysql(ModelsMigrationSyncMixin,

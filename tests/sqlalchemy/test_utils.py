@@ -14,28 +14,27 @@
 #    under the License.
 
 import uuid
-import warnings
 
 import fixtures
-from migrate.changeset import UniqueConstraint
 import mock
 from oslotest import base as test_base
 from oslotest import moxstubout
 import six
-from six import moves
 from six.moves.urllib import parse
 import sqlalchemy
 from sqlalchemy.dialects import mysql
 from sqlalchemy import Boolean, Index, Integer, DateTime, String, SmallInteger
 from sqlalchemy import MetaData, Table, Column, ForeignKey
 from sqlalchemy.engine import reflection
-from sqlalchemy.exc import SAWarning, ResourceClosedError
+from sqlalchemy.engine import url as sa_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import select
 from sqlalchemy.types import UserDefinedType, NullType
 
 from oslo.db import exception
 from oslo.db.sqlalchemy import models
+from oslo.db.sqlalchemy import provision
 from oslo.db.sqlalchemy import session
 from oslo.db.sqlalchemy import test_base as db_test_base
 from oslo.db.sqlalchemy import utils
@@ -453,129 +452,6 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         # behavior), any integer value can be inserted, otherwise only 1 or 0.
         self.engine.execute(table.insert({'deleted': 10}))
 
-    def test_utils_drop_unique_constraint(self):
-        table_name = "__test_tmp_table__"
-        uc_name = 'uniq_foo'
-        values = [
-            {'id': 1, 'a': 3, 'foo': 10},
-            {'id': 2, 'a': 2, 'foo': 20},
-            {'id': 3, 'a': 1, 'foo': 30},
-        ]
-        test_table = Table(
-            table_name, self.meta,
-            Column('id', Integer, primary_key=True, nullable=False),
-            Column('a', Integer),
-            Column('foo', Integer),
-            UniqueConstraint('a', name='uniq_a'),
-            UniqueConstraint('foo', name=uc_name),
-        )
-        test_table.create()
-
-        self.engine.execute(test_table.insert(), values)
-        # NOTE(boris-42): This method is generic UC dropper.
-        utils.drop_unique_constraint(self.engine, table_name, uc_name, 'foo')
-
-        s = test_table.select().order_by(test_table.c.id)
-        rows = self.engine.execute(s).fetchall()
-
-        for i in moves.range(len(values)):
-            v = values[i]
-            self.assertEqual((v['id'], v['a'], v['foo']), rows[i])
-
-        # NOTE(boris-42): Update data about Table from DB.
-        meta = MetaData(bind=self.engine)
-        test_table = Table(table_name, meta, autoload=True)
-        constraints = [c for c in test_table.constraints
-                       if c.name == uc_name]
-        self.assertEqual(len(constraints), 0)
-        self.assertEqual(len(test_table.constraints), 1)
-
-        test_table.drop()
-
-    @db_test_base.backend_specific('sqlite')
-    def test_util_drop_unique_constraint_with_not_supported_sqlite_type(self):
-        table_name = "__test_tmp_table__"
-        uc_name = 'uniq_foo'
-        values = [
-            {'id': 1, 'a': 3, 'foo': 10},
-            {'id': 2, 'a': 2, 'foo': 20},
-            {'id': 3, 'a': 1, 'foo': 30}
-        ]
-
-        test_table = Table(
-            table_name, self.meta,
-            Column('id', Integer, primary_key=True, nullable=False),
-            Column('a', Integer),
-            Column('foo', CustomType, default=0),
-            UniqueConstraint('a', name='uniq_a'),
-            UniqueConstraint('foo', name=uc_name),
-        )
-        test_table.create()
-
-        self.engine.execute(test_table.insert(), values)
-        warnings.simplefilter("ignore", SAWarning)
-
-        # reflection of custom types has been fixed upstream
-        if SA_VERSION < (0, 9, 0):
-            # NOTE(boris-42): Missing info about column `foo` that has
-            #                 unsupported type CustomType.
-            self.assertRaises(exception.ColumnError,
-                              utils.drop_unique_constraint,
-                              self.engine, table_name, uc_name, 'foo')
-
-            # NOTE(boris-42): Wrong type of foo instance. it should be
-            #                 instance of sqlalchemy.Column.
-            self.assertRaises(exception.ColumnError,
-                              utils.drop_unique_constraint,
-                              self.engine, table_name, uc_name, 'foo',
-                              foo=Integer())
-
-        foo = Column('foo', CustomType, default=0)
-        utils.drop_unique_constraint(
-            self.engine, table_name, uc_name, 'foo', foo=foo)
-
-        s = test_table.select().order_by(test_table.c.id)
-        rows = self.engine.execute(s).fetchall()
-
-        for i in moves.range(len(values)):
-            v = values[i]
-            self.assertEqual((v['id'], v['a'], v['foo']), rows[i])
-
-        # NOTE(boris-42): Update data about Table from DB.
-        meta = MetaData(bind=self.engine)
-        test_table = Table(table_name, meta, autoload=True)
-        constraints = [c for c in test_table.constraints if c.name == uc_name]
-        self.assertEqual(len(constraints), 0)
-        self.assertEqual(len(test_table.constraints), 1)
-        test_table.drop()
-
-    @db_test_base.backend_specific('sqlite')
-    def test_drop_unique_constraint_in_sqlite_fk_recreate(self):
-        parent_table = Table(
-            'table0', self.meta,
-            Column('id', Integer, primary_key=True),
-            Column('foo', Integer),
-        )
-        parent_table.create()
-        table_name = 'table1'
-        table = Table(
-            table_name, self.meta,
-            Column('id', Integer, primary_key=True),
-            Column('baz', Integer),
-            Column('bar', Integer, ForeignKey("table0.id")),
-            UniqueConstraint('baz', name='constr1')
-        )
-        table.create()
-        utils.drop_unique_constraint(self.engine, table_name, 'constr1', 'baz')
-
-        insp = reflection.Inspector.from_engine(self.engine)
-        f_keys = insp.get_foreign_keys(table_name)
-        self.assertEqual(len(f_keys), 1)
-        f_key = f_keys[0]
-        self.assertEqual(f_key['referred_table'], 'table0')
-        self.assertEqual(f_key['referred_columns'], ['id'])
-        self.assertEqual(f_key['constrained_columns'], ['bar'])
-
     def test_insert_from_select(self):
         insert_table_name = "__test_insert_to_table__"
         select_table_name = "__test_select_from_table__"
@@ -636,12 +512,12 @@ class TestConnectionUtils(test_utils.BaseTestCase):
     def setUp(self):
         super(TestConnectionUtils, self).setUp()
 
-        self.full_credentials = {'backend': 'mysql',
+        self.full_credentials = {'backend': 'postgresql',
                                  'database': 'test',
                                  'user': 'dude',
                                  'passwd': 'pass'}
 
-        self.connect_string = 'mysql://dude:pass@localhost/test'
+        self.connect_string = 'postgresql://dude:pass@localhost/test'
 
     def test_connect_string(self):
         connect_string = utils.get_connect_string(**self.full_credentials)
@@ -663,18 +539,57 @@ class TestConnectionUtils(test_utils.BaseTestCase):
 
     def test_is_backend_unavail(self):
         log = self.useFixture(fixtures.FakeLogger())
-        error_cause = ('This result object does not return rows. It has been'
-                       'closed automatically.')
-        error_msg = ("The %s backend is unavailable: %s\n" %
-                     ('mysql', error_cause))
-
+        err = OperationalError("Can't connect to database", None, None)
+        error_msg = "The postgresql backend is unavailable: %s\n" % err
         self.mox.StubOutWithMock(sqlalchemy.engine.base.Engine, 'connect')
-        sqlalchemy.engine.base.Engine.connect().AndRaise(
-            ResourceClosedError(error_cause))
+        sqlalchemy.engine.base.Engine.connect().AndRaise(err)
         self.mox.ReplayAll()
-
         self.assertFalse(utils.is_backend_avail(**self.full_credentials))
         self.assertEqual(error_msg, log.output)
+
+    def test_ensure_backend_available(self):
+        self.mox.StubOutWithMock(sqlalchemy.engine.base.Engine, 'connect')
+        fake_connection = self.mox.CreateMockAnything()
+        fake_connection.close()
+        sqlalchemy.engine.base.Engine.connect().AndReturn(fake_connection)
+        self.mox.ReplayAll()
+
+        eng = provision.Backend._ensure_backend_available(self.connect_string)
+        self.assertIsInstance(eng, sqlalchemy.engine.base.Engine)
+        self.assertEqual(self.connect_string, str(eng.url))
+
+    def test_ensure_backend_available_no_connection_raises(self):
+        log = self.useFixture(fixtures.FakeLogger())
+        err = OperationalError("Can't connect to database", None, None)
+        self.mox.StubOutWithMock(sqlalchemy.engine.base.Engine, 'connect')
+        sqlalchemy.engine.base.Engine.connect().AndRaise(err)
+        self.mox.ReplayAll()
+
+        exc = self.assertRaises(
+            exception.BackendNotAvailable,
+            provision.Backend._ensure_backend_available, self.connect_string
+        )
+        self.assertEqual("Could not connect", str(exc))
+        self.assertEqual(
+            "The postgresql backend is unavailable: %s" % err,
+            log.output.strip())
+
+    def test_ensure_backend_available_no_dbapi_raises(self):
+        log = self.useFixture(fixtures.FakeLogger())
+        self.mox.StubOutWithMock(sqlalchemy, 'create_engine')
+        sqlalchemy.create_engine(
+            sa_url.make_url(self.connect_string)).AndRaise(
+            ImportError("Can't import DBAPI module foobar"))
+        self.mox.ReplayAll()
+
+        exc = self.assertRaises(
+            exception.BackendNotAvailable,
+            provision.Backend._ensure_backend_available, self.connect_string
+        )
+        self.assertEqual("No DBAPI installed", str(exc))
+        self.assertEqual(
+            "The postgresql backend is unavailable: Can't import "
+            "DBAPI module foobar", log.output.strip())
 
     def test_get_db_connection_info(self):
         conn_pieces = parse.urlparse(self.connect_string)
@@ -684,7 +599,7 @@ class TestConnectionUtils(test_utils.BaseTestCase):
     def test_connect_string_host(self):
         self.full_credentials['host'] = 'myhost'
         connect_string = utils.get_connect_string(**self.full_credentials)
-        self.assertEqual(connect_string, 'mysql://dude:pass@myhost/test')
+        self.assertEqual(connect_string, 'postgresql://dude:pass@myhost/test')
 
 
 class MyModelSoftDeletedProjectId(declarative_base(), models.ModelBase,
@@ -987,6 +902,41 @@ class TestDialectFunctionDispatcher(test_base.BaseTestCase):
         dispatcher.dispatch_on_drivername("sqlite")("foo")
         self.assertEqual(
             [mock.call.sqlite("foo"), mock.call.default("foo")],
+            callable_fn.mock_calls
+        )
+
+    def test_multiple_nesting(self):
+        callable_fn = mock.Mock(
+            default=mock.Mock(return_value=None),
+            mysql=mock.Mock(return_value=None)
+        )
+
+        dispatcher = utils.dispatch_for_dialect("*", multiple=True)(
+            callable_fn.default)
+
+        dispatcher = dispatcher.dispatch_for("mysql+mysqlconnector")(
+            dispatcher.dispatch_for("mysql+mysqldb")(
+                callable_fn.mysql
+            )
+        )
+
+        mysqldb_url = sqlalchemy.engine.url.make_url("mysql+mysqldb://")
+        mysqlconnector_url = sqlalchemy.engine.url.make_url(
+            "mysql+mysqlconnector://")
+        sqlite_url = sqlalchemy.engine.url.make_url("sqlite://")
+
+        dispatcher(mysqldb_url, 1)
+        dispatcher(mysqlconnector_url, 2)
+        dispatcher(sqlite_url, 3)
+
+        self.assertEqual(
+            [
+                mock.call.mysql(mysqldb_url, 1),
+                mock.call.default(mysqldb_url, 1),
+                mock.call.mysql(mysqlconnector_url, 2),
+                mock.call.default(mysqlconnector_url, 2),
+                mock.call.default(sqlite_url, 3)
+            ],
             callable_fn.mock_calls
         )
 

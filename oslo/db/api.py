@@ -23,12 +23,12 @@ takes no arguments. The method can return any object that implements DB
 API methods.
 """
 
-import functools
 import logging
 import threading
 import time
 
 from oslo.utils import importutils
+import six
 
 from oslo.db._i18n import _LE
 from oslo.db import exception
@@ -93,7 +93,7 @@ class wrap_db_retry(object):
         self.max_retry_interval = max_retry_interval
 
     def __call__(self, f):
-        @functools.wraps(f)
+        @six.wraps(f)
         def wrapper(*args, **kwargs):
             next_interval = self.retry_interval
             remaining = self.max_retries
@@ -177,10 +177,10 @@ class DBAPI(object):
                 # Import the untranslated name if we don't have a mapping
                 backend_path = self._backend_mapping.get(self._backend_name,
                                                          self._backend_name)
-                backend_mod = importutils.try_import(backend_path)
-                if not backend_mod:
-                    raise ImportError("Unable to import backend '%s'" %
-                                      self._backend_name)
+                LOG.debug('Loading backend %(name)r from %(path)r',
+                          {'name': self._backend_name,
+                           'path': backend_path})
+                backend_mod = importutils.import_module(backend_path)
                 self._backend = backend_mod.get_backend()
 
     def __getattr__(self, key):

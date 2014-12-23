@@ -368,7 +368,7 @@ def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
                   connection_debug=0, max_pool_size=None, max_overflow=None,
                   pool_timeout=None, sqlite_synchronous=True,
                   connection_trace=False, max_retries=10, retry_interval=10,
-                  thread_checkin=True):
+                  thread_checkin=True, logging_name=None):
     """Return a new SQLAlchemy engine."""
 
     url = sqlalchemy.engine.url.make_url(sql_connection)
@@ -376,6 +376,8 @@ def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
     engine_args = {
         "pool_recycle": idle_timeout,
         'convert_unicode': True,
+        'connect_args': {},
+        'logging_name': logging_name
     }
 
     _setup_logging(connection_debug)
@@ -433,7 +435,22 @@ def _init_connection_args(url, engine_args, **kw):
     # replace it with StaticPool.
     if issubclass(pool_class, pool.SingletonThreadPool):
         engine_args["poolclass"] = pool.StaticPool
-        engine_args["connect_args"] = {'check_same_thread': False}
+        engine_args['connect_args']['check_same_thread'] = False
+
+
+@_init_connection_args.dispatch_for("postgresql")
+def _init_connection_args(url, engine_args, **kw):
+    if 'client_encoding' not in url.query:
+        # Set encoding using engine_args instead of connect_args since
+        # it's supported for PostgreSQL 8.*. More details at:
+        # http://docs.sqlalchemy.org/en/rel_0_9/dialects/postgresql.html
+        engine_args['client_encoding'] = 'utf8'
+
+
+@_init_connection_args.dispatch_for("mysql")
+def _init_connection_args(url, engine_args, **kw):
+    if 'charset' not in url.query:
+        engine_args['connect_args']['charset'] = 'utf8'
 
 
 @_init_connection_args.dispatch_for("mysql+mysqlconnector")
@@ -441,8 +458,18 @@ def _init_connection_args(url, engine_args, **kw):
     # mysqlconnector engine (<1.0) incorrectly defaults to
     # raise_on_warnings=True
     #  https://bitbucket.org/zzzeek/sqlalchemy/issue/2515
-    if "raise_on_warnings" not in url.query:
-        engine_args['connect_args'] = {'raise_on_warnings': False}
+    if 'raise_on_warnings' not in url.query:
+        engine_args['connect_args']['raise_on_warnings'] = False
+
+
+@_init_connection_args.dispatch_for("mysql+mysqldb")
+@_init_connection_args.dispatch_for("mysql+oursql")
+def _init_connection_args(url, engine_args, **kw):
+    # Those drivers require use_unicode=0 to avoid performance drop due
+    # to internal usage of Python unicode objects in the driver
+    #  http://docs.sqlalchemy.org/en/rel_0_9/dialects/mysql.html
+    if 'use_unicode' not in url.query:
+        engine_args['connect_args']['use_unicode'] = 0
 
 
 @utils.dispatch_for_dialect('*', multiple=True)
@@ -466,19 +493,27 @@ def _init_events(engine, mysql_sql_mode=None, **kw):
             cursor = dbapi_con.cursor()
             cursor.execute("SET SESSION sql_mode = %s", [mysql_sql_mode])
 
-    realmode = engine.execute("SHOW VARIABLES LIKE 'sql_mode'").fetchone()
-    if realmode is None:
-        LOG.warning(_LW('Unable to detect effective SQL mode'))
-    else:
-        realmode = realmode[1]
-        LOG.debug('MySQL server mode set to %s', realmode)
-        if 'TRADITIONAL' not in realmode.upper() and \
-            'STRICT_ALL_TABLES' not in realmode.upper():
-            LOG.warning(
-                _LW(
-                    "MySQL SQL mode is '%s', "
-                    "consider enabling TRADITIONAL or STRICT_ALL_TABLES"),
-                realmode)
+    @sqlalchemy.event.listens_for(engine, "first_connect")
+    def _check_effective_sql_mode(dbapi_con, connection_rec):
+        if mysql_sql_mode is not None:
+            _set_session_sql_mode(dbapi_con, connection_rec)
+
+        cursor = dbapi_con.cursor()
+        cursor.execute("SHOW VARIABLES LIKE 'sql_mode'")
+        realmode = cursor.fetchone()
+
+        if realmode is None:
+            LOG.warning(_LW('Unable to detect effective SQL mode'))
+        else:
+            realmode = realmode[1]
+            LOG.debug('MySQL server mode set to %s', realmode)
+            if 'TRADITIONAL' not in realmode.upper() and \
+                'STRICT_ALL_TABLES' not in realmode.upper():
+                LOG.warning(
+                    _LW(
+                        "MySQL SQL mode is '%s', "
+                        "consider enabling TRADITIONAL or STRICT_ALL_TABLES"),
+                    realmode)
 
 
 @_init_events.dispatch_for("sqlite")
@@ -535,7 +570,10 @@ def _test_connection(engine, max_retries, retry_interval):
         attempts = itertools.count()
     else:
         attempts = six.moves.range(max_retries)
-    de = None
+    # See: http://legacy.python.org/dev/peps/pep-3110/#semantic-changes for
+    # why we are not using 'de' directly (it can be removed from the local
+    # scope).
+    de_ref = None
     for attempt in attempts:
         try:
             return exc_filters.handle_connect_error(engine)
@@ -543,9 +581,10 @@ def _test_connection(engine, max_retries, retry_interval):
             msg = _LW('SQL connection failed. %s attempts left.')
             LOG.warning(msg, max_retries - attempt)
             time.sleep(retry_interval)
+            de_ref = de
     else:
-        if de is not None:
-            six.reraise(type(de), de)
+        if de_ref is not None:
+            six.reraise(type(de_ref), de_ref)
 
 
 class Query(sqlalchemy.orm.query.Query):

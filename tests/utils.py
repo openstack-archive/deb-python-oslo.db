@@ -13,9 +13,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
+
 from oslo.config import cfg
 from oslotest import base as test_base
 from oslotest import moxstubout
+import six
+
+
+if six.PY3:
+    @contextlib.contextmanager
+    def nested(*contexts):
+        with contextlib.ExitStack() as stack:
+            yield [stack.enter_context(c) for c in contexts]
+else:
+    nested = contextlib.nested
 
 
 class BaseTestCase(test_base.BaseTestCase):

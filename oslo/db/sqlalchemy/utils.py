@@ -54,6 +54,31 @@ LOG = logging.getLogger(__name__)
 _DBURL_REGEX = re.compile(r"[^:]+://([^:]+):([^@]+)@.+")
 
 
+def get_callable_name(function):
+    # TODO(harlowja): Replace this once
+    # it is possible to use https://review.openstack.org/#/c/122495/ which is
+    # a more complete and expansive module that does a similar thing...
+    try:
+        method_self = six.get_method_self(function)
+    except AttributeError:
+        method_self = None
+    if method_self is not None:
+        if isinstance(method_self, six.class_types):
+            im_class = method_self
+        else:
+            im_class = type(method_self)
+        try:
+            parts = (im_class.__module__, function.__qualname__)
+        except AttributeError:
+            parts = (im_class.__module__, im_class.__name__, function.__name__)
+    else:
+        try:
+            parts = (function.__module__, function.__qualname__)
+        except AttributeError:
+            parts = (function.__module__, function.__name__)
+    return '.'.join(parts)
+
+
 def sanitize_db_url(url):
     match = _DBURL_REGEX.match(url)
     if match:
@@ -350,49 +375,6 @@ def _get_not_supported_column(col_name_col_instance, column_name):
     return column
 
 
-def drop_unique_constraint(migrate_engine, table_name, uc_name, *columns,
-                           **col_name_col_instance):
-    """Drop unique constraint from table.
-
-    DEPRECATED: this function is deprecated and will be removed from oslo.db
-    in a few releases. Please use UniqueConstraint.drop() method directly for
-    sqlalchemy-migrate migration scripts.
-
-    This method drops UC from table and works for mysql, postgresql and sqlite.
-    In mysql and postgresql we are able to use "alter table" construction.
-    Sqlalchemy doesn't support some sqlite column types and replaces their
-    type with NullType in metadata. We process these columns and replace
-    NullType with the correct column type.
-
-    :param migrate_engine: sqlalchemy engine
-    :param table_name:     name of table that contains uniq constraint.
-    :param uc_name:        name of uniq constraint that will be dropped.
-    :param columns:        columns that are in uniq constraint.
-    :param col_name_col_instance:   contains pair column_name=column_instance.
-                            column_instance is instance of Column. These params
-                            are required only for columns that have unsupported
-                            types by sqlite. For example BigInteger.
-    """
-
-    from migrate.changeset import UniqueConstraint
-
-    meta = MetaData()
-    meta.bind = migrate_engine
-    t = Table(table_name, meta, autoload=True)
-
-    if migrate_engine.name == "sqlite":
-        override_cols = [
-            _get_not_supported_column(col_name_col_instance, col.name)
-            for col in t.columns
-            if isinstance(col.type, NullType)
-        ]
-        for col in override_cols:
-            t.columns.replace(col)
-
-    uc = UniqueConstraint(*columns, table=t, name=uc_name)
-    uc.drop()
-
-
 def drop_old_duplicate_entries_from_table(migrate_engine, table_name,
                                           use_soft_delete, *uc_column_names):
     """Drop all old rows having the same values for columns in uc_columns.
@@ -667,6 +649,11 @@ def get_connect_string(backend, database, user=None, passwd=None,
 
     Try to get a connection with a very specific set of values, if we get
     these then we'll run the tests, otherwise they are skipped
+
+    DEPRECATED: this function is deprecated and will be removed from oslo.db
+    in a few releases. Please use the provisioning system for dealing
+    with URLs and database provisioning.
+
     """
     args = {'backend': backend,
             'user': user,
@@ -681,22 +668,26 @@ def get_connect_string(backend, database, user=None, passwd=None,
 
 
 def is_backend_avail(backend, database, user=None, passwd=None):
+    """Return True if the given backend is available.
+
+
+    DEPRECATED: this function is deprecated and will be removed from oslo.db
+    in a few releases. Please use the provisioning system to access
+    databases based on backend availability.
+
+    """
+    from oslo.db.sqlalchemy import provision
+
+    connect_uri = get_connect_string(backend=backend,
+                                     database=database,
+                                     user=user,
+                                     passwd=passwd)
     try:
-        connect_uri = get_connect_string(backend=backend,
-                                         database=database,
-                                         user=user,
-                                         passwd=passwd)
-        engine = sqlalchemy.create_engine(connect_uri)
-        connection = engine.connect()
-    except Exception as e:
-        # intentionally catch all to handle exceptions even if we don't
-        # have any backend code loaded.
-        msg = _LI("The %(backend)s backend is unavailable: %(exception)s")
-        LOG.info(msg, {"backend": backend, "exception": e})
+        eng = provision.Backend._ensure_backend_available(connect_uri)
+        eng.dispose()
+    except exception.BackendNotAvailable:
         return False
     else:
-        connection.close()
-        engine.dispose()
         return True
 
 
@@ -874,6 +865,9 @@ class DialectFunctionDispatcher(object):
     def dispatch_for(self, expr):
         def decorate(fn):
             dbname, driver = self._parse_dispatch(expr)
+            if fn is self:
+                fn = fn._last
+            self._last = fn
             self._register(expr, dbname, driver, fn)
             return self
         return decorate

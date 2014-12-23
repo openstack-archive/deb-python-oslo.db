@@ -453,19 +453,36 @@ class MysqlConnectTest(test_base.MySQLOpportunisticTestCase):
 
         log = self.useFixture(fixtures.FakeLogger(level=logging.WARN))
 
-        engine = self._fixture(sql_mode=None)
+        mysql_conn = self.engine.raw_connection()
+        self.addCleanup(mysql_conn.close)
+        mysql_conn.detach()
+        mysql_cursor = mysql_conn.cursor()
 
-        @sqlalchemy.event.listens_for(
-            engine, "before_cursor_execute", retval=True)
-        def replace_stmt(
-            conn, cursor, statement, parameters,
-            context, executemany):
+        def execute(statement, parameters=()):
             if "SHOW VARIABLES LIKE 'sql_mode'" in statement:
                 statement = "SHOW VARIABLES LIKE 'i_dont_exist'"
-            return statement, parameters
+            return mysql_cursor.execute(statement, parameters)
 
-        session._init_events.dispatch_on_drivername("mysql")(engine)
+        test_engine = sqlalchemy.create_engine(self.engine.url,
+                                               _initialize=False)
 
+        with mock.patch.object(
+            test_engine.pool, '_creator',
+            mock.Mock(
+                return_value=mock.Mock(
+                    cursor=mock.Mock(
+                        return_value=mock.Mock(
+                            execute=execute,
+                            fetchone=mysql_cursor.fetchone,
+                            fetchall=mysql_cursor.fetchall
+                        )
+                    )
+                )
+            )
+        ):
+            session._init_events.dispatch_on_drivername("mysql")(test_engine)
+
+            test_engine.raw_connection()
         self.assertIn('Unable to detect effective SQL mode',
                       log.output)
 
@@ -519,84 +536,90 @@ class CreateEngineTest(oslo_test.BaseTestCase):
 
     """
 
+    def setUp(self):
+        super(CreateEngineTest, self).setUp()
+        self.args = {'connect_args': {}}
+
     def test_queuepool_args(self):
-        args = {}
         session._init_connection_args(
-            url.make_url("mysql://u:p@host/test"), args,
+            url.make_url("mysql://u:p@host/test"), self.args,
             max_pool_size=10, max_overflow=10)
-        self.assertEqual(args['pool_size'], 10)
-        self.assertEqual(args['max_overflow'], 10)
+        self.assertEqual(self.args['pool_size'], 10)
+        self.assertEqual(self.args['max_overflow'], 10)
 
     def test_sqlite_memory_pool_args(self):
         for _url in ("sqlite://", "sqlite:///:memory:"):
-            args = {}
             session._init_connection_args(
-                url.make_url(_url), args,
+                url.make_url(_url), self.args,
                 max_pool_size=10, max_overflow=10)
 
             # queuepool arguments are not peresnet
             self.assertTrue(
-                'pool_size' not in args)
+                'pool_size' not in self.args)
             self.assertTrue(
-                'max_overflow' not in args)
+                'max_overflow' not in self.args)
 
-            self.assertEqual(
-                args['connect_args'],
-                {'check_same_thread': False}
-            )
+            self.assertEqual(self.args['connect_args']['check_same_thread'],
+                             False)
 
             # due to memory connection
-            self.assertTrue('poolclass' in args)
+            self.assertTrue('poolclass' in self.args)
 
     def test_sqlite_file_pool_args(self):
-        args = {}
         session._init_connection_args(
-            url.make_url("sqlite:///somefile.db"), args,
+            url.make_url("sqlite:///somefile.db"), self.args,
             max_pool_size=10, max_overflow=10)
 
         # queuepool arguments are not peresnet
-        self.assertTrue('pool_size' not in args)
+        self.assertTrue('pool_size' not in self.args)
         self.assertTrue(
-            'max_overflow' not in args)
+            'max_overflow' not in self.args)
 
-        self.assertTrue(
-            'connect_args' not in args
-        )
+        self.assertFalse(self.args['connect_args'])
 
         # NullPool is the default for file based connections,
         # no need to specify this
-        self.assertTrue('poolclass' not in args)
+        self.assertTrue('poolclass' not in self.args)
 
     def test_mysql_connect_args_default(self):
-        args = {}
         session._init_connection_args(
-            url.make_url("mysql+mysqldb://u:p@host/test"), args)
-        self.assertTrue(
-            'connect_args' not in args
-        )
+            url.make_url("mysql://u:p@host/test"), self.args)
+        self.assertEqual(self.args['connect_args'],
+                         {'charset': 'utf8', 'use_unicode': 0})
+
+    def test_mysql_oursql_connect_args_default(self):
+        session._init_connection_args(
+            url.make_url("mysql+oursql://u:p@host/test"), self.args)
+        self.assertEqual(self.args['connect_args'],
+                         {'charset': 'utf8', 'use_unicode': 0})
+
+    def test_mysql_mysqldb_connect_args_default(self):
+        session._init_connection_args(
+            url.make_url("mysql+mysqldb://u:p@host/test"), self.args)
+        self.assertEqual(self.args['connect_args'],
+                         {'charset': 'utf8', 'use_unicode': 0})
+
+    def test_postgresql_connect_args_default(self):
+        session._init_connection_args(
+            url.make_url("postgresql://u:p@host/test"), self.args)
+        self.assertEqual(self.args['client_encoding'], 'utf8')
+        self.assertFalse(self.args['connect_args'])
 
     def test_mysqlconnector_raise_on_warnings_default(self):
-        args = {}
         session._init_connection_args(
             url.make_url("mysql+mysqlconnector://u:p@host/test"),
-            args)
-        self.assertEqual(
-            args,
-            {'connect_args': {'raise_on_warnings': False}}
-        )
+            self.args)
+        self.assertEqual(self.args['connect_args']['raise_on_warnings'], False)
 
     def test_mysqlconnector_raise_on_warnings_override(self):
-        args = {}
         session._init_connection_args(
             url.make_url(
                 "mysql+mysqlconnector://u:p@host/test"
                 "?raise_on_warnings=true"),
-            args
+            self.args
         )
 
-        self.assertTrue(
-            'connect_args' not in args
-        )
+        self.assertFalse('raise_on_warnings' in self.args['connect_args'])
 
     def test_thread_checkin(self):
         with mock.patch("sqlalchemy.event.listens_for"):

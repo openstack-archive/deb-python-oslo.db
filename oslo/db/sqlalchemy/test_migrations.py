@@ -15,6 +15,7 @@
 #    under the License.
 
 import abc
+import collections
 import logging
 import pprint
 
@@ -284,7 +285,87 @@ class ModelsMigrationsSync(object):
     test_model_sync() will run migration scripts for the engine provided and
     then compare the given metadata to the one reflected from the database.
     The difference between MODELS and MIGRATION scripts will be printed and
-    the test will fail, if the difference is not empty.
+    the test will fail, if the difference is not empty. The return value is
+    really a list of actions, that should be performed in order to make the
+    current database schema state (i.e. migration scripts) consistent with
+    models definitions. It's left up to developers to analyze the output and
+    decide whether the models definitions or the migration scripts should be
+    modified to make them consistent.
+
+    Output::
+
+        [(
+            'add_table',
+            description of the table from models
+        ),
+        (
+            'remove_table',
+            description of the table from database
+        ),
+        (
+            'add_column',
+            schema,
+            table name,
+            column description from models
+        ),
+        (
+            'remove_column',
+            schema,
+            table name,
+            column description from database
+        ),
+        (
+            'add_index',
+            description of the index from models
+        ),
+        (
+            'remove_index',
+            description of the index from database
+        ),
+        (
+            'add_constraint',
+            description of constraint from models
+        ),
+        (
+            'remove_constraint,
+            description of constraint from database
+        ),
+        (
+            'modify_nullable',
+            schema,
+            table name,
+            column name,
+            {
+                'existing_type': type of the column from database,
+                'existing_server_default': default value from database
+            },
+            nullable from database,
+            nullable from models
+        ),
+        (
+            'modify_type',
+            schema,
+            table name,
+            column name,
+            {
+                'existing_nullable': database nullable,
+                'existing_server_default': default value from database
+            },
+            database column type,
+            type of the column from models
+        ),
+        (
+            'modify_default',
+            schema,
+            table name,
+            column name,
+            {
+                'existing_nullable': database nullable,
+                'existing_type': type of the column from database
+            },
+            connection column default value,
+            default from models
+        )]
 
     Method include_object() can be overridden to exclude some tables from
     comparison (e.g. migrate_repo).
@@ -395,7 +476,11 @@ class ModelsMigrationsSync(object):
 
     @_compare_server_default.dispatch_for('postgresql')
     def _compare_server_default(bind, meta_col, insp_def, meta_def):
-        if isinstance(meta_col.type, sqlalchemy.String):
+        if isinstance(meta_col.type, sqlalchemy.Enum):
+            if meta_def is None or insp_def is None:
+                return meta_def != insp_def
+            return insp_def != "'%s'::%s" % (meta_def.arg, meta_col.type.name)
+        elif isinstance(meta_col.type, sqlalchemy.String):
             if meta_def is None or insp_def is None:
                 return meta_def != insp_def
             return insp_def != "'%s'::character varying" % meta_def.arg
@@ -426,6 +511,73 @@ class ModelsMigrationsSync(object):
             for table in tbs:
                 conn.execute(schema.DropTable(table))
 
+    FKInfo = collections.namedtuple('fk_info', ['constrained_columns',
+                                                'referred_table',
+                                                'referred_columns'])
+
+    def check_foreign_keys(self, metadata, bind):
+        """Compare foreign keys between model and db table.
+
+        :returns: a list that contains information about:
+
+         * should be a new key added or removed existing,
+         * name of that key,
+         * source table,
+         * referred table,
+         * constrained columns,
+         * referred columns
+
+         Output::
+
+             [('drop_key',
+               'testtbl_fk_check_fkey',
+               'testtbl',
+               fk_info(constrained_columns=(u'fk_check',),
+                       referred_table=u'table',
+                       referred_columns=(u'fk_check',)))]
+
+        """
+
+        diff = []
+        insp = sqlalchemy.engine.reflection.Inspector.from_engine(bind)
+        # Get all tables from db
+        db_tables = insp.get_table_names()
+        # Get all tables from models
+        model_tables = metadata.tables
+        for table in db_tables:
+            if table not in model_tables:
+                continue
+            # Get all necessary information about key of current table from db
+            fk_db = dict((self._get_fk_info_from_db(i), i['name'])
+                         for i in insp.get_foreign_keys(table))
+            fk_db_set = set(fk_db.keys())
+            # Get all necessary information about key of current table from
+            # models
+            fk_models = dict((self._get_fk_info_from_model(fk), fk)
+                             for fk in model_tables[table].foreign_keys)
+            fk_models_set = set(fk_models.keys())
+            for key in (fk_db_set - fk_models_set):
+                diff.append(('drop_key', fk_db[key], table, key))
+                LOG.info(("Detected removed foreign key %(fk)r on "
+                          "table %(table)r"), {'fk': fk_db[key],
+                                               'table': table})
+            for key in (fk_models_set - fk_db_set):
+                diff.append(('add_key', fk_models[key], table, key))
+                LOG.info((
+                    "Detected added foreign key for column %(fk)r on table "
+                    "%(table)r"), {'fk': fk_models[key].column.name,
+                                   'table': table})
+        return diff
+
+    def _get_fk_info_from_db(self, fk):
+        return self.FKInfo(tuple(fk['constrained_columns']),
+                           fk['referred_table'],
+                           tuple(fk['referred_columns']))
+
+    def _get_fk_info_from_model(self, fk):
+        return self.FKInfo((fk.parent.name,), fk.column.table.name,
+                           (fk.column.name,))
+
     def test_models_sync(self):
         # recent versions of sqlalchemy and alembic are needed for running of
         # this test, but we already have them in requirements
@@ -450,8 +602,11 @@ class ModelsMigrationsSync(object):
             mc = alembic.migration.MigrationContext.configure(conn, opts=opts)
 
             # compare schemas and fail with diff, if it's not empty
-            diff = alembic.autogenerate.compare_metadata(mc,
-                                                         self.get_metadata())
+            diff1 = alembic.autogenerate.compare_metadata(mc,
+                                                          self.get_metadata())
+            diff2 = self.check_foreign_keys(self.get_metadata(),
+                                            self.get_engine())
+            diff = diff1 + diff2
             if diff:
                 msg = pprint.pformat(diff, indent=2, width=20)
                 self.fail(

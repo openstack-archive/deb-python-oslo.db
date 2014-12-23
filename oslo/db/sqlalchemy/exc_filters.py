@@ -58,6 +58,8 @@ def filters(dbname, exception_type, regex):
 # as well as sqlalchemy.exc.DBAPIError, as SQLAlchemy will reraise it
 # as this until issue #3075 is fixed.
 @filters("mysql", sqla_exc.OperationalError, r"^.*\b1213\b.*Deadlock found.*")
+@filters("mysql", sqla_exc.OperationalError,
+         r"^.*\b1205\b.*Lock wait timeout exceeded.*")
 @filters("mysql", sqla_exc.InternalError, r"^.*\b1213\b.*Deadlock found.*")
 @filters("postgresql", sqla_exc.OperationalError, r"^.*deadlock detected.*")
 @filters("postgresql", sqla_exc.DBAPIError, r"^.*deadlock detected.*")
@@ -147,7 +149,8 @@ def _default_dupe_key_error(integrity_error, match, engine_name,
 
 @filters("sqlite", sqla_exc.IntegrityError,
          (r"^.*columns?(?P<columns>[^)]+)(is|are)\s+not\s+unique$",
-          r"^.*UNIQUE\s+constraint\s+failed:\s+(?P<columns>.+)$"))
+          r"^.*UNIQUE\s+constraint\s+failed:\s+(?P<columns>.+)$",
+          r"^.*PRIMARY\s+KEY\s+must\s+be\s+unique.*$"))
 def _sqlite_dupe_key_error(integrity_error, match, engine_name, is_disconnect):
     """Filter for SQLite duplicate key error.
 
@@ -162,9 +165,21 @@ def _sqlite_dupe_key_error(integrity_error, match, engine_name, is_disconnect):
     1 column - (IntegrityError) UNIQUE constraint failed: tbl.k1
     N columns - (IntegrityError) UNIQUE constraint failed: tbl.k1, tbl.k2
 
+    sqlite since 3.8.2:
+    (IntegrityError) PRIMARY KEY must be unique
+
     """
-    columns = match.group('columns')
-    columns = [c.split('.')[-1] for c in columns.strip().split(", ")]
+    columns = []
+    # NOTE(ochuprykov): We can get here by last filter in which there are no
+    #                   groups. Trying to access the substring that matched by
+    #                   the group will lead to IndexError. In this case just
+    #                   pass empty list to exception.DBDuplicateEntry
+    try:
+        columns = match.group('columns')
+        columns = [c.split('.')[-1] for c in columns.strip().split(", ")]
+    except IndexError:
+        pass
+
     raise exception.DBDuplicateEntry(columns, integrity_error)
 
 
@@ -254,9 +269,8 @@ def _raise_operational_errors_directly_filter(operational_error,
         raise operational_error
 
 
-# For the db2, the error code is -30081 since the db2 is still not ready
-@filters("mysql", sqla_exc.OperationalError, r".*\((?:2002|2003|2006|2013)")
-@filters("ibm_db_sa", sqla_exc.OperationalError, r".*(?:-30081)")
+@filters("mysql", sqla_exc.OperationalError, r".*\(.*(?:2002|2003|2006|2013)")
+@filters("ibm_db_sa", sqla_exc.OperationalError, r".*(?:30081)")
 def _is_db_connection_error(operational_error, match, engine_name,
                             is_disconnect):
     """Detect the exception as indicating a recoverable error on connect."""
@@ -299,13 +313,13 @@ def handler(context):
     more specific exception class are attempted first.
 
     """
-    def _dialect_registries(connection):
-        if connection.dialect.name in _registry:
-            yield _registry[connection.dialect.name]
+    def _dialect_registries(engine):
+        if engine.dialect.name in _registry:
+            yield _registry[engine.dialect.name]
         if '*' in _registry:
             yield _registry['*']
 
-    for per_dialect in _dialect_registries(context.connection):
+    for per_dialect in _dialect_registries(context.engine):
         for exc in (
                 context.sqlalchemy_exception,
                 context.original_exception):
@@ -319,7 +333,7 @@ def handler(context):
                                 fn(
                                     exc,
                                     match,
-                                    context.connection.dialect.name,
+                                    context.engine.dialect.name,
                                     context.is_disconnect)
                             except exception.DBConnectionError:
                                 context.is_disconnect = True
@@ -334,18 +348,11 @@ def handle_connect_error(engine):
     """Handle connect error.
 
     Provide a special context that will allow on-connect errors
-    to be raised within the filtering context.
-    """
-    try:
-        return engine.connect()
-    except Exception as e:
-        if isinstance(e, sqla_exc.StatementError):
-            s_exc, orig = e, e.orig
-        else:
-            s_exc, orig = None, e
+    to be treated within the filtering context.
 
-        ctx = compat.ExceptionContextImpl(
-            orig, s_exc, engine, None,
-            None, None, None, False
-        )
-        handler(ctx)
+    This routine is dependent on SQLAlchemy version, as version 1.0.0
+    provides this functionality natively.
+
+    """
+    with compat.handle_connect_context(handler, engine):
+        return engine.connect()
