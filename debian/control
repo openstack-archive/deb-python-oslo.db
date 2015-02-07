@@ -40,6 +40,7 @@ Homepage: http://launchpad.net/oslo
 Package: python-oslo.db
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
+Provides: python-oslo-db
 Depends: alembic (>= 0.7.1),
          python-babel (>= 1.3),
          python-iso8601 (>= 0.1.9),
