@@ -29,11 +29,11 @@ from sqlalchemy.engine import url
 from sqlalchemy import Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 
-from oslo.db import exception
-from oslo.db import options as db_options
-from oslo.db.sqlalchemy import models
-from oslo.db.sqlalchemy import session
-from oslo.db.sqlalchemy import test_base
+from oslo_db import exception
+from oslo_db import options as db_options
+from oslo_db.sqlalchemy import models
+from oslo_db.sqlalchemy import session
+from oslo_db.sqlalchemy import test_base
 
 
 BASE = declarative_base()
@@ -209,6 +209,16 @@ class FakeDB2Engine(object):
         pass
 
 
+class MySQLDefaultModeTestCase(test_base.MySQLOpportunisticTestCase):
+    def test_default_is_traditional(self):
+        with self.engine.connect() as conn:
+            sql_mode = conn.execute(
+                "SHOW VARIABLES LIKE 'sql_mode'"
+            ).first()[1]
+
+        self.assertTrue("TRADITIONAL" in sql_mode)
+
+
 class MySQLModeTestCase(test_base.MySQLOpportunisticTestCase):
 
     def __init__(self, *args, **kwargs):
@@ -300,8 +310,8 @@ class EngineFacadeTestCase(oslo_test.BaseTestCase):
         self.assertFalse(ses.autocommit)
         self.assertTrue(ses.expire_on_commit)
 
-    @mock.patch('oslo.db.sqlalchemy.session.get_maker')
-    @mock.patch('oslo.db.sqlalchemy.session.create_engine')
+    @mock.patch('oslo_db.sqlalchemy.session.get_maker')
+    @mock.patch('oslo_db.sqlalchemy.session.create_engine')
     def test_creation_from_config(self, create_engine, get_maker):
         conf = cfg.ConfigOpts()
         conf.register_opts(db_options.database_opts, group='database')
@@ -441,8 +451,11 @@ class MysqlConnectTest(test_base.MySQLOpportunisticTestCase):
         # If _mysql_set_mode_callback is called with sql_mode=None, then
         # the SQL mode is NOT set on the connection.
 
+        # get the GLOBAL sql_mode, not the @@SESSION, so that
+        # we get what is configured for the MySQL database, as opposed
+        # to what our own session.create_engine() has set it to.
         expected = self.engine.execute(
-            "SHOW VARIABLES LIKE 'sql_mode'").fetchone()[1]
+            "SELECT @@GLOBAL.sql_mode").scalar()
 
         engine = self._fixture(sql_mode=None)
         self._assert_sql_mode(engine, expected, None)
@@ -637,13 +650,26 @@ class PatchStacktraceTest(test_base.DbTestCase):
 
     def test_trace(self):
         engine = self.engine
-        session._add_trace_comments(engine)
-        conn = engine.connect()
-        with mock.patch.object(engine.dialect, "do_execute") as mock_exec:
 
-            conn.execute("select * from table")
+        # NOTE(viktors): The code in oslo_db.sqlalchemy.session filters out
+        #                lines from modules under oslo_db, so we should remove
+        #                 "oslo_db/" from file path in traceback.
+        import traceback
+        orig_extract_stack = traceback.extract_stack
 
-        call = mock_exec.mock_calls[0]
+        def extract_stack():
+            return [(row[0].replace("oslo_db/", ""), row[1], row[2], row[3])
+                    for row in orig_extract_stack()]
 
-        # we're the caller, see that we're in there
-        self.assertTrue("tests/sqlalchemy/test_sqlalchemy.py" in call[1][1])
+        with mock.patch("traceback.extract_stack", side_effect=extract_stack):
+
+            session._add_trace_comments(engine)
+            conn = engine.connect()
+            with mock.patch.object(engine.dialect, "do_execute") as mock_exec:
+
+                conn.execute("select * from table")
+
+            call = mock_exec.mock_calls[0]
+
+            # we're the caller, see that we're in there
+            self.assertIn("tests/sqlalchemy/test_sqlalchemy.py", call[1][1])
