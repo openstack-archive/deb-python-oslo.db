@@ -21,7 +21,7 @@ import logging
 
 import fixtures
 import mock
-from oslo.config import cfg
+from oslo_config import cfg
 from oslotest import base as oslo_test
 import sqlalchemy
 from sqlalchemy import Column, MetaData, Table
@@ -229,20 +229,22 @@ class MySQLModeTestCase(test_base.MySQLOpportunisticTestCase):
 
     def setUp(self):
         super(MySQLModeTestCase, self).setUp()
-
-        self.engine = session.create_engine(self.engine.url,
-                                            mysql_sql_mode=self.mysql_mode)
-        self.connection = self.engine.connect()
+        mode_engine = session.create_engine(
+            self.engine.url,
+            mysql_sql_mode=self.mysql_mode)
+        self.connection = mode_engine.connect()
 
         meta = MetaData()
-        meta.bind = self.engine
         self.test_table = Table(_TABLE_NAME + "mode", meta,
                                 Column('id', Integer, primary_key=True),
                                 Column('bar', String(255)))
-        self.test_table.create()
+        self.test_table.create(self.connection)
 
-        self.addCleanup(self.test_table.drop)
-        self.addCleanup(self.connection.close)
+        def cleanup():
+            self.test_table.drop(self.connection)
+            self.connection.close()
+            mode_engine.dispose()
+        self.addCleanup(cleanup)
 
     def _test_string_too_long(self, value):
         with self.connection.begin():
@@ -665,9 +667,11 @@ class PatchStacktraceTest(test_base.DbTestCase):
 
             session._add_trace_comments(engine)
             conn = engine.connect()
+            orig_do_exec = engine.dialect.do_execute
             with mock.patch.object(engine.dialect, "do_execute") as mock_exec:
 
-                conn.execute("select * from table")
+                mock_exec.side_effect = orig_do_exec
+                conn.execute("select 1;")
 
             call = mock_exec.mock_calls[0]
 

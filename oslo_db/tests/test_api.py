@@ -16,8 +16,8 @@
 """Unit tests for DB API."""
 
 import mock
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_utils import importutils
 
 from oslo_db import api
 from oslo_db import exception
@@ -175,3 +175,32 @@ class DBReconnectTestCase(DBAPITestCase):
         self.assertNotEqual(
             0, self.test_db_api.error_counter,
             'Retry did not stop after sql_max_retries iterations.')
+
+
+class DBRetryRequestCase(DBAPITestCase):
+    def test_retry_wrapper_succeeds(self):
+        @api.wrap_db_retry(max_retries=10, retry_on_request=True)
+        def some_method():
+            pass
+
+        some_method()
+
+    def test_retry_wrapper_reaches_limit(self):
+        max_retries = 10
+
+        @api.wrap_db_retry(max_retries=10, retry_on_request=True)
+        def some_method(res):
+            res['result'] += 1
+            raise exception.RetryRequest(ValueError())
+
+        res = {'result': 0}
+        self.assertRaises(ValueError, some_method, res)
+        self.assertEqual(max_retries + 1, res['result'])
+
+    @mock.patch.object(DBAPI, 'api_class_call1')
+    @mock.patch.object(api, 'wrap_db_retry')
+    def test_mocked_methods_are_not_wrapped(self, mocked_wrap, mocked_method):
+        dbapi = api.DBAPI('oslo_db.tests.test_api')
+        dbapi.api_class_call1()
+
+        self.assertFalse(mocked_wrap.called)

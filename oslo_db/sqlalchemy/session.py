@@ -283,7 +283,7 @@ import logging
 import re
 import time
 
-from oslo.utils import timeutils
+from oslo_utils import timeutils
 import six
 import sqlalchemy.orm
 from sqlalchemy import pool
@@ -576,7 +576,7 @@ def _test_connection(engine, max_retries, retry_interval):
     de_ref = None
     for attempt in attempts:
         try:
-            return exc_filters.handle_connect_error(engine)
+            return engine.connect()
         except exception.DBConnectionError as de:
             msg = _LW('SQL connection failed. %s attempts left.')
             LOG.warning(msg, max_retries - attempt)

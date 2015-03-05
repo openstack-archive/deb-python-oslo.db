@@ -16,6 +16,7 @@
 
 import abc
 import collections
+import functools
 import logging
 import pprint
 
@@ -25,9 +26,7 @@ import alembic.migration
 import pkg_resources as pkg
 import six
 import sqlalchemy
-from sqlalchemy.engine import reflection
 import sqlalchemy.exc
-from sqlalchemy import schema
 import sqlalchemy.sql.expression as expr
 import sqlalchemy.types as types
 
@@ -485,32 +484,6 @@ class ModelsMigrationsSync(object):
                 return meta_def != insp_def
             return insp_def != "'%s'::character varying" % meta_def.arg
 
-    def _cleanup(self):
-        engine = self.get_engine()
-        with engine.begin() as conn:
-            inspector = reflection.Inspector.from_engine(engine)
-            metadata = schema.MetaData()
-            tbs = []
-            all_fks = []
-
-            for table_name in inspector.get_table_names():
-                fks = []
-                for fk in inspector.get_foreign_keys(table_name):
-                    if not fk['name']:
-                        continue
-                    fks.append(
-                        schema.ForeignKeyConstraint((), (), name=fk['name'])
-                        )
-                table = schema.Table(table_name, metadata, *fks)
-                tbs.append(table)
-                all_fks.extend(fks)
-
-            for fkc in all_fks:
-                conn.execute(schema.DropConstraint(fkc))
-
-            for table in tbs:
-                conn.execute(schema.DropTable(table))
-
     FKInfo = collections.namedtuple('fk_info', ['constrained_columns',
                                                 'referred_table',
                                                 'referred_columns'])
@@ -592,7 +565,8 @@ class ModelsMigrationsSync(object):
                           ' for running of this test: %s' % e)
 
         # drop all tables after a test run
-        self.addCleanup(self._cleanup)
+        self.addCleanup(functools.partial(self.db.backend.drop_all_objects,
+                                          self.get_engine()))
 
         # run migration scripts
         self.db_sync(self.get_engine())
