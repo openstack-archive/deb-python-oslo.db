@@ -2,19 +2,20 @@ Source: python-oslo.db
 Section: python
 Priority: optional
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
-Uploaders: Thomas Goirand <zigo@debian.org>
+Uploaders: Thomas Goirand <zigo@debian.org>,
 Build-Depends: debhelper (>= 9),
                dh-python,
                openstack-pkg-tools,
                python-all (>= 2.6.6-3~),
                python-pbr,
                python-setuptools,
-               python-sphinx
+               python-sphinx,
 Build-Depends-Indep: alembic (>= 0.7.2),
-                     python-babel (>= 1.3),
-                     python-coverage (>= 3.6),
-                     python-fixtures (>= 0.3.14),
-                     python-iso8601 (>= 0.1.9),
+                     python-babel,
+                     python-coverage,
+                     python-fixtures,
+                     python-hacking,
+                     python-iso8601,
                      python-migrate (>= 0.9.5),
                      python-mysqldb,
                      python-oslo.config (>= 1:1.9.0),
@@ -24,15 +25,14 @@ Build-Depends-Indep: alembic (>= 0.7.2),
                      python-oslotest (>= 1.2.0),
                      python-psycopg2,
                      python-six (>= 1.9.0),
-                     python-sqlalchemy (>= 0.9.7),
+                     python-sqlalchemy,
                      python-stevedore (>= 1.1.0),
-                     python-subunit (>= 0.0.18),
                      python-tempest-lib (>= 0.3.0),
-                     python-testresources (>= 0.2.4),
-                     python-testscenarios (>= 0.4),
-                     python-testtools (>= 0.9.36),
-                     subunit (>= 0.0.18),
-                     testrepository (>= 0.0.18)
+                     python-testresources,
+                     python-testscenarios,
+                     python-testtools,
+                     subunit,
+                     testrepository,
 Standards-Version: 3.9.5
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-oslo.db.git
 Vcs-Git: git://anonscm.debian.org/openstack/python-oslo.db.git
@@ -40,23 +40,23 @@ Homepage: http://launchpad.net/oslo
 
 Package: python-oslo.db
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Provides: python-oslo-db
+Pre-Depends: dpkg (>= 1.15.6~),
+Provides: python-oslo-db,
 Depends: alembic (>= 0.7.2),
-         python-babel (>= 1.3),
-         python-iso8601 (>= 0.1.9),
+         python-babel,
+         python-iso8601,
          python-migrate (>= 0.9.5),
          python-oslo.config (>= 1:1.9.0),
          python-oslo.i18n (>= 1.3.0),
          python-oslo.utils (>= 1.2.0),
          python-pbr,
          python-six (>= 1.9.0),
-         python-sqlalchemy (>= 0.9.7),
+         python-sqlalchemy,
          python-stevedore (>= 1.1.0),
-         python-testresources (>= 0.2.4),
-         python-testscenarios (>= 0.4),
+         python-testresources,
+         python-testscenarios,
          ${misc:Depends},
-         ${python:Depends}
+         ${python:Depends},
 Description: database connectivity to the different backends and helper utils - Python 2.x
  The Oslo database handling library is part of the OpenStack project. It
  provides database connectivity to the different backends and also provides
@@ -67,8 +67,9 @@ Description: database connectivity to the different backends and helper utils - 
 Package: python-oslo.db-doc
 Section: doc
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ${misc:Depends}, ${sphinxdoc:Depends}
+Pre-Depends: dpkg (>= 1.15.6~),
+Depends: ${misc:Depends},
+         ${sphinxdoc:Depends},
 Description: database connectivity to the different backends and helper utils - doc
  The Oslo database handling library is part of the OpenStack project. It
  provides database connectivity to the different backends and also provides
