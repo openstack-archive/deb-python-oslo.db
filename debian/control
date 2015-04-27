@@ -33,7 +33,7 @@ Build-Depends-Indep: alembic (>= 0.7.2),
                      python-testtools,
                      subunit,
                      testrepository,
-Standards-Version: 3.9.5
+Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-oslo.db.git
 Vcs-Git: git://anonscm.debian.org/openstack/python-oslo.db.git
 Homepage: http://launchpad.net/oslo
