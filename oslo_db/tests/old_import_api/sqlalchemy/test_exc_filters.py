@@ -19,10 +19,10 @@ import mock
 from oslotest import base as oslo_test_base
 import six
 import sqlalchemy as sqla
+from sqlalchemy import event
 from sqlalchemy.orm import mapper
 
 from oslo.db import exception
-from oslo.db.sqlalchemy import compat
 from oslo.db.sqlalchemy import exc_filters
 from oslo.db.sqlalchemy import test_base
 from oslo_db.sqlalchemy import session as private_session
@@ -76,6 +76,9 @@ class TestsExceptionFilter(_SQLAExceptionMatcher, oslo_test_base.BaseTestCase):
         pass
 
     class ProgrammingError(Error):
+        pass
+
+    class DataError(Error):
         pass
 
     class TransactionRollbackError(OperationalError):
@@ -221,6 +224,52 @@ class TestFallthroughsAndNonDBAPI(TestsExceptionFilter):
             exception.DBError
         )
         self.assertEqual("mysqldb has an attribute error", matched.args[0])
+
+
+class TestDataError(TestsExceptionFilter):
+
+    def test_mysql_incorrect_value(self):
+        matched = self._run_test(
+            "mysql", "insert into testtbl (id, b) values (4242, 4242)",
+            self.OperationalError(
+                "ERROR 1292 (22007): Incorrect datetime value: '4242' "
+                "for column 'b' at row 1"
+            ),
+            exception.DBDataError
+        )
+        self.assertInnerException(
+            matched,
+            "OperationalError",
+            ("ERROR 1292 (22007): Incorrect datetime value: '4242' for column "
+             "'b' at row 1"),
+            "insert into testtbl (id, b) values (4242, 4242)", ())
+
+    def test_mysql_data_truncated_for_column(self):
+        matched = self._run_test(
+            "mysql", "insert into testtbl (id, b) values (4242, '42aabbccdd')",
+            self.DataError(
+                "ERROR 1265 (01000): Data truncated for column 'b' at row 1"),
+            exception.DBDataError
+        )
+        self.assertInnerException(
+            matched,
+            "DataError",
+            "ERROR 1265 (01000): Data truncated for column 'b' at row 1",
+            "insert into testtbl (id, b) values (4242, '42aabbccdd')", ())
+
+    def test_mysql_out_of_range_value(self):
+        matched = self._run_test(
+            "mysql", "insert into testtbl (id, b) values (4242, 424242424242)",
+            self.DataError(
+                "ERROR 1264 (22003): Out of range value for column 'b' "
+                "at row 1"),
+            exception.DBDataError
+        )
+        self.assertInnerException(
+            matched,
+            "DataError",
+            "ERROR 1264 (22003): Out of range value for column 'b' at row 1",
+            "insert into testtbl (id, b) values (4242, 424242424242)", ())
 
 
 class TestReferenceErrorSQLite(_SQLAExceptionMatcher, test_base.DbTestCase):
@@ -670,7 +719,8 @@ class TestDBDisconnected(TestsExceptionFilter):
             dialect_name, exception, num_disconnects, is_disconnect=True):
         engine = self.engine
 
-        compat.engine_connect(engine, private_session._connect_ping_listener)
+        event.listen(
+            engine, "engine_connect", private_session._connect_ping_listener)
 
         real_do_execute = engine.dialect.do_execute
         counter = itertools.count(1)

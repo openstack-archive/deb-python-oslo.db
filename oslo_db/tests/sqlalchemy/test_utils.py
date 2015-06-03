@@ -29,10 +29,13 @@ from sqlalchemy.engine import reflection
 from sqlalchemy.engine import url as sa_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import select
 from sqlalchemy.types import UserDefinedType, NullType
 
 from oslo_db import exception
+from oslo_db.sqlalchemy.compat import utils as compat_utils
 from oslo_db.sqlalchemy import models
 from oslo_db.sqlalchemy import provision
 from oslo_db.sqlalchemy import session
@@ -42,7 +45,7 @@ from oslo_db.tests import utils as test_utils
 
 
 Base = declarative_base()
-SA_VERSION = tuple(map(int, sqlalchemy.__version__.split('.')))
+SA_VERSION = compat_utils.SQLA_VERSION
 
 
 class TestSanitizeDbUrl(test_base.BaseTestCase):
@@ -71,6 +74,18 @@ class FakeTable(Base):
     user_id = Column(String(50), primary_key=True)
     project_id = Column(String(50))
     snapshot_id = Column(String(50))
+
+    # mox is comparing in some awkward way that
+    # in this case requires the same identity of object
+    _expr_to_appease_mox = project_id + snapshot_id
+
+    @hybrid_property
+    def some_hybrid(self):
+        raise NotImplementedError()
+
+    @some_hybrid.expression
+    def some_hybrid(cls):
+        return cls._expr_to_appease_mox
 
     def foo(self):
         pass
@@ -192,6 +207,41 @@ class TestPaginateQuery(test_base.BaseTestCase):
         self.assertRaises(ValueError, utils.paginate_query,
                           self.query, self.model, 5, ['user_id', 'project_id'],
                           marker=self.marker, sort_dirs=['asc', 'mixed'])
+
+    def test_paginate_on_hybrid(self):
+        sqlalchemy.asc(self.model.user_id).AndReturn('asc_1')
+        self.query.order_by('asc_1').AndReturn(self.query)
+
+        sqlalchemy.desc(self.model.some_hybrid).AndReturn('desc_1')
+        self.query.order_by('desc_1').AndReturn(self.query)
+
+        self.query.limit(5).AndReturn(self.query)
+        self.mox.ReplayAll()
+        utils.paginate_query(self.query, self.model, 5,
+                             ['user_id', 'some_hybrid'],
+                             sort_dirs=['asc', 'desc'])
+
+
+class TestPaginateQueryActualSQL(test_base.BaseTestCase):
+
+    def test_paginate_on_hybrid_assert_stmt(self):
+        s = Session()
+        q = s.query(FakeTable)
+        q = utils.paginate_query(
+            q, FakeTable, 5,
+            ['user_id', 'some_hybrid'],
+            sort_dirs=['asc', 'desc'])
+        expected_core_sql = (
+            select([FakeTable]).
+            order_by(sqlalchemy.asc(FakeTable.user_id)).
+            order_by(sqlalchemy.desc(FakeTable.some_hybrid)).
+            limit(5)
+        )
+
+        self.assertEqual(
+            str(q.statement.compile()),
+            str(expected_core_sql.compile())
+        )
 
 
 class TestMigrationUtils(db_test_base.DbTestCase):
@@ -507,6 +557,79 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         rows = self.conn.execute(query_all).fetchall()
         # Verify we really have 4 rows in insert_table
         self.assertEqual(len(rows), 4)
+
+    def test_insert_from_select_with_specified_columns(self):
+        insert_table_name = "__test_insert_to_table__"
+        select_table_name = "__test_select_from_table__"
+        uuidstrs = []
+        for unused in range(10):
+            uuidstrs.append(uuid.uuid4().hex)
+        insert_table = Table(
+            insert_table_name, self.meta,
+            Column('id', Integer, primary_key=True,
+                   nullable=False, autoincrement=True),
+            Column('uuid', String(36), nullable=False))
+        select_table = Table(
+            select_table_name, self.meta,
+            Column('id', Integer, primary_key=True,
+                   nullable=False, autoincrement=True),
+            Column('uuid', String(36), nullable=False))
+
+        insert_table.create()
+        select_table.create()
+        # Add 10 rows to select_table
+        for uuidstr in uuidstrs:
+            ins_stmt = select_table.insert().values(uuid=uuidstr)
+            self.conn.execute(ins_stmt)
+
+        # Select 4 rows in one chunk from select_table
+        column = select_table.c.id
+        query_insert = select([select_table],
+                              select_table.c.id < 5).order_by(column)
+        insert_statement = utils.InsertFromSelect(insert_table,
+                                                  query_insert, ['id', 'uuid'])
+        result_insert = self.conn.execute(insert_statement)
+        # Verify we insert 4 rows
+        self.assertEqual(result_insert.rowcount, 4)
+
+        query_all = select([insert_table]).where(
+            insert_table.c.uuid.in_(uuidstrs))
+        rows = self.conn.execute(query_all).fetchall()
+        # Verify we really have 4 rows in insert_table
+        self.assertEqual(len(rows), 4)
+
+    def test_insert_from_select_with_specified_columns_negative(self):
+        insert_table_name = "__test_insert_to_table__"
+        select_table_name = "__test_select_from_table__"
+        uuidstrs = []
+        for unused in range(10):
+            uuidstrs.append(uuid.uuid4().hex)
+        insert_table = Table(
+            insert_table_name, self.meta,
+            Column('id', Integer, primary_key=True,
+                   nullable=False, autoincrement=True),
+            Column('uuid', String(36), nullable=False))
+        select_table = Table(
+            select_table_name, self.meta,
+            Column('id', Integer, primary_key=True,
+                   nullable=False, autoincrement=True),
+            Column('uuid', String(36), nullable=False))
+
+        insert_table.create()
+        select_table.create()
+        # Add 10 rows to select_table
+        for uuidstr in uuidstrs:
+            ins_stmt = select_table.insert().values(uuid=uuidstr)
+            self.conn.execute(ins_stmt)
+
+        # Select 4 rows in one chunk from select_table
+        column = select_table.c.id
+        query_insert = select([select_table],
+                              select_table.c.id < 5).order_by(column)
+        insert_statement = utils.InsertFromSelect(insert_table,
+                                                  query_insert, ['uuid', 'id'])
+        self.assertRaises(exception.DBError, self.conn.execute,
+                          insert_statement)
 
 
 class PostgesqlTestMigrations(TestMigrationUtils,

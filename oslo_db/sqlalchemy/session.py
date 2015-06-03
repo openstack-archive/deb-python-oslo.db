@@ -286,6 +286,7 @@ import time
 
 from oslo_utils import timeutils
 import six
+from sqlalchemy import event
 from sqlalchemy import exc
 import sqlalchemy.orm
 from sqlalchemy import pool
@@ -295,8 +296,8 @@ from sqlalchemy.sql.expression import select
 from oslo_db._i18n import _LW
 from oslo_db import exception
 from oslo_db import options
-from oslo_db.sqlalchemy import compat
 from oslo_db.sqlalchemy import exc_filters
+from oslo_db.sqlalchemy import update_match
 from oslo_db.sqlalchemy import utils
 
 LOG = logging.getLogger(__name__)
@@ -407,10 +408,14 @@ def create_engine(sql_connection, sqlite_fk=False, mysql_sql_mode=None,
     exc_filters.register_engine(engine)
 
     # register engine connect handler
-    compat.engine_connect(engine, _connect_ping_listener)
+    event.listen(engine, "engine_connect", _connect_ping_listener)
 
     # initial connect + test
-    _test_connection(engine, max_retries, retry_interval)
+    # NOTE(viktors): the current implementation of _test_connection()
+    #                does nothing, if max_retries == 0, so we can skip it
+    if max_retries:
+        test_conn = _test_connection(engine, max_retries, retry_interval)
+        test_conn.close()
 
     return engine
 
@@ -598,6 +603,27 @@ class Query(sqlalchemy.orm.query.Query):
                             'updated_at': literal_column('updated_at'),
                             'deleted_at': timeutils.utcnow()},
                            synchronize_session=synchronize_session)
+
+    def update_returning_pk(self, values, surrogate_key):
+        """Perform an UPDATE, returning the primary key of the matched row.
+
+        This is a method-version of
+        oslo_db.sqlalchemy.update_match.update_returning_pk(); see that
+        function for usage details.
+
+        """
+        return update_match.update_returning_pk(self, values, surrogate_key)
+
+    def update_on_match(self, specimen, surrogate_key, values, **kw):
+        """Emit an UPDATE statement matching the given specimen.
+
+        This is a method-version of
+        oslo_db.sqlalchemy.update_match.update_on_match(); see that function
+        for usage details.
+
+        """
+        return update_match.update_on_match(
+            self, specimen, surrogate_key, values, **kw)
 
 
 class Session(sqlalchemy.orm.session.Session):

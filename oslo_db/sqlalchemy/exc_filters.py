@@ -91,8 +91,12 @@ def _deadlock_error(operational_error, match, engine_name, is_disconnect):
 
 
 @filters("mysql", sqla_exc.IntegrityError,
-         r"^.*\b1062\b.*Duplicate entry '(?P<value>[^']+)'"
+         r"^.*\b1062\b.*Duplicate entry '(?P<value>.+)'"
          r" for key '(?P<columns>[^']+)'.*$")
+# NOTE(jd) For binary types
+@filters("mysql", sqla_exc.IntegrityError,
+         r"^.*\b1062\b.*Duplicate entry \\'(?P<value>.+)\\'"
+         r" for key \\'(?P<columns>.+)\\'.*$")
 # NOTE(pkholkin): the first regex is suitable only for PostgreSQL 9.x versions
 #                 the second regex is suitable for PostgreSQL 8.x versions
 @filters("postgresql", sqla_exc.IntegrityError,
@@ -187,12 +191,12 @@ def _sqlite_dupe_key_error(integrity_error, match, engine_name, is_disconnect):
          r"(?i).*foreign key constraint failed")
 @filters("postgresql", sqla_exc.IntegrityError,
          r".*on table \"(?P<table>[^\"]+)\" violates "
-         "foreign key constraint \"(?P<constraint>[^\"]+)\"\s*\n"
+         "foreign key constraint \"(?P<constraint>[^\"]+)\".*\n"
          "DETAIL:  Key \((?P<key>.+)\)=\(.+\) "
-         "is not present in table "
+         "is (not present in|still referenced from) table "
          "\"(?P<key_table>[^\"]+)\".")
 @filters("mysql", sqla_exc.IntegrityError,
-         r".* u?'Cannot add or update a child row: "
+         r".* u?'Cannot (add|delete) or update a (child|parent) row: "
          'a foreign key constraint fails \([`"].+[`"]\.[`"](?P<table>.+)[`"], '
          'CONSTRAINT [`"](?P<constraint>.+)[`"] FOREIGN KEY '
          '\([`"](?P<key>.+)[`"]\) REFERENCES [`"](?P<key_table>.+)[`"] ')
@@ -218,6 +222,26 @@ def _foreign_key_error(integrity_error, match, engine_name, is_disconnect):
 
     raise exception.DBReferenceError(table, constraint, key, key_table,
                                      integrity_error)
+
+
+@filters("postgresql", sqla_exc.IntegrityError,
+         r".*new row for relation \"(?P<table>.+)\" "
+         "violates check constraint "
+         "\"(?P<check_name>.+)\"")
+def _check_constraint_error(
+        integrity_error, match, engine_name, is_disconnect):
+    """Filter for check constraint errors."""
+
+    try:
+        table = match.group("table")
+    except IndexError:
+        table = None
+    try:
+        check_name = match.group("check_name")
+    except IndexError:
+        check_name = None
+
+    raise exception.DBConstraintError(table, check_name, integrity_error)
 
 
 @filters("ibm_db_sa", sqla_exc.IntegrityError, r"^.*SQL0803N.*$")
@@ -248,6 +272,18 @@ def _raise_mysql_table_doesnt_exist_asis(
     """
 
     raise error
+
+
+@filters("mysql", sqla_exc.OperationalError,
+         r".*(1292|1366).*Incorrect \w+ value.*")
+@filters("mysql", sqla_exc.DataError,
+         r".*1265.*Data truncated for column.*")
+@filters("mysql", sqla_exc.DataError,
+         r".*1264.*Out of range value for column.*")
+def _raise_data_error(error, match, engine_name, is_disconnect):
+    """Raise DBDataError exception for different data errors."""
+
+    raise exception.DBDataError(error)
 
 
 @filters("*", sqla_exc.OperationalError, r".*")

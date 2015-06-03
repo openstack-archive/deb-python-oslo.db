@@ -19,10 +19,10 @@ import mock
 from oslotest import base as oslo_test_base
 import six
 import sqlalchemy as sqla
+from sqlalchemy import event
 from sqlalchemy.orm import mapper
 
 from oslo_db import exception
-from oslo_db.sqlalchemy import compat
 from oslo_db.sqlalchemy import exc_filters
 from oslo_db.sqlalchemy import session
 from oslo_db.sqlalchemy import test_base
@@ -233,14 +233,14 @@ class TestReferenceErrorSQLite(_SQLAExceptionMatcher, test_base.DbTestCase):
 
         meta = sqla.MetaData(bind=self.engine)
 
-        table_1 = sqla.Table(
+        self.table_1 = sqla.Table(
             "resource_foo", meta,
             sqla.Column("id", sqla.Integer, primary_key=True),
             sqla.Column("foo", sqla.Integer),
             mysql_engine='InnoDB',
             mysql_charset='utf8',
         )
-        table_1.create()
+        self.table_1.create()
 
         self.table_2 = sqla.Table(
             "resource_entity", meta,
@@ -274,6 +274,30 @@ class TestReferenceErrorSQLite(_SQLAExceptionMatcher, test_base.DbTestCase):
         self.assertIsNone(matched.key)
         self.assertIsNone(matched.key_table)
 
+    def test_raise_delete(self):
+        self.engine.execute("PRAGMA foreign_keys = ON;")
+
+        with self.engine.connect() as conn:
+            conn.execute(self.table_1.insert({"id": 1234, "foo": 42}))
+            conn.execute(self.table_2.insert({"id": 4321, "foo_id": 1234}))
+        matched = self.assertRaises(
+            exception.DBReferenceError,
+            self.engine.execute,
+            self.table_1.delete()
+        )
+        self.assertInnerException(
+            matched,
+            "IntegrityError",
+            "foreign key constraint failed",
+            "DELETE FROM resource_foo",
+            (),
+        )
+
+        self.assertIsNone(matched.table)
+        self.assertIsNone(matched.constraint)
+        self.assertIsNone(matched.key)
+        self.assertIsNone(matched.key_table)
+
 
 class TestReferenceErrorPostgreSQL(TestReferenceErrorSQLite,
                                    test_base.PostgreSQLOpportunisticTestCase):
@@ -299,6 +323,31 @@ class TestReferenceErrorPostgreSQL(TestReferenceErrorSQLite,
         self.assertEqual("foo_fkey", matched.constraint)
         self.assertEqual("foo_id", matched.key)
         self.assertEqual("resource_foo", matched.key_table)
+
+    def test_raise_delete(self):
+        with self.engine.connect() as conn:
+            conn.execute(self.table_1.insert({"id": 1234, "foo": 42}))
+            conn.execute(self.table_2.insert({"id": 4321, "foo_id": 1234}))
+        matched = self.assertRaises(
+            exception.DBReferenceError,
+            self.engine.execute,
+            self.table_1.delete()
+        )
+        self.assertInnerException(
+            matched,
+            "IntegrityError",
+            "update or delete on table \"resource_foo\" violates foreign key "
+            "constraint \"foo_fkey\" on table \"resource_entity\"\n"
+            "DETAIL:  Key (id)=(1234) is still referenced from "
+            "table \"resource_entity\".\n",
+            "DELETE FROM resource_foo",
+            {},
+        )
+
+        self.assertEqual("resource_foo", matched.table)
+        self.assertEqual("foo_fkey", matched.constraint)
+        self.assertEqual("id", matched.key)
+        self.assertEqual("resource_entity", matched.key_table)
 
 
 class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
@@ -352,6 +401,45 @@ class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
         self.assertEqual("foo_fkey", matched.constraint)
         self.assertEqual("foo_id", matched.key)
         self.assertEqual("resource_foo", matched.key_table)
+
+    def test_raise_delete(self):
+        with self.engine.connect() as conn:
+            conn.execute(self.table_1.insert({"id": 1234, "foo": 42}))
+            conn.execute(self.table_2.insert({"id": 4321, "foo_id": 1234}))
+        matched = self.assertRaises(
+            exception.DBReferenceError,
+            self.engine.execute,
+            self.table_1.delete()
+        )
+        self.assertInnerException(
+            matched,
+            "IntegrityError",
+            "(1451, 'cannot delete or update a parent row: a foreign key "
+            "constraint fails (`{0}`.`resource_entity`, "
+            "constraint `foo_fkey` "
+            "foreign key (`foo_id`) references "
+            "`resource_foo` (`id`))')".format(self.engine.url.database),
+            "DELETE FROM resource_foo",
+            (),
+        )
+
+        self.assertEqual("resource_entity", matched.table)
+        self.assertEqual("foo_fkey", matched.constraint)
+        self.assertEqual("foo_id", matched.key)
+        self.assertEqual("resource_foo", matched.key_table)
+
+
+class TestConstraint(TestsExceptionFilter):
+    def test_postgresql(self):
+        matched = self._run_test(
+            "postgresql", "insert into resource some_values",
+            self.IntegrityError(
+                "new row for relation \"resource\" violates "
+                "check constraint \"ck_started_before_ended\""),
+            exception.DBConstraintError,
+        )
+        self.assertEqual("resource", matched.table)
+        self.assertEqual("ck_started_before_ended", matched.check_name)
 
 
 class TestDuplicate(TestsExceptionFilter):
@@ -422,6 +510,24 @@ class TestDuplicate(TestsExceptionFilter):
             "1062 (23000): Duplicate entry '2' for key 'b'",
             expected_columns=['b'],
             expected_value='2'
+        )
+
+    def test_mysql_binary(self):
+        self._run_dupe_constraint_test(
+            "mysql",
+            "(1062, \'Duplicate entry "
+            "\\\'\\\\x8A$\\\\x8D\\\\xA6\"s\\\\x8E\\\' "
+            "for key \\\'PRIMARY\\\'\')",
+            expected_columns=['PRIMARY'],
+            expected_value="\\\\x8A$\\\\x8D\\\\xA6\"s\\\\x8E"
+        )
+        self._run_dupe_constraint_test(
+            "mysql",
+            "(1062, \'Duplicate entry "
+            "''\\\\x8A$\\\\x8D\\\\xA6\"s\\\\x8E!,' "
+            "for key 'PRIMARY'\')",
+            expected_columns=['PRIMARY'],
+            expected_value="'\\\\x8A$\\\\x8D\\\\xA6\"s\\\\x8E!,"
         )
 
     def test_postgresql_single(self):
@@ -678,7 +784,7 @@ class TestDBDisconnected(TestsExceptionFilter):
             dialect_name, exception, num_disconnects, is_disconnect=True):
         engine = self.engine
 
-        compat.engine_connect(engine, session._connect_ping_listener)
+        event.listen(engine, "engine_connect", session._connect_ping_listener)
 
         real_do_execute = engine.dialect.do_execute
         counter = itertools.count(1)
@@ -860,7 +966,8 @@ class TestDBConnectPingWrapping(TestsExceptionFilter):
 
     def setUp(self):
         super(TestDBConnectPingWrapping, self).setUp()
-        compat.engine_connect(self.engine, session._connect_ping_listener)
+        event.listen(
+            self.engine, "engine_connect", session._connect_ping_listener)
 
     @contextlib.contextmanager
     def _fixture(

@@ -30,14 +30,12 @@ from sqlalchemy import Column
 from sqlalchemy.engine import Connectable
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine import url as sa_url
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy import func
 from sqlalchemy import Index
 from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy.sql.expression import literal_column
-from sqlalchemy.sql.expression import UpdateBase
 from sqlalchemy.sql import text
 from sqlalchemy import String
 from sqlalchemy import Table
@@ -149,10 +147,13 @@ def paginate_query(query, model, limit, sort_keys, marker=None,
             raise ValueError(_("Unknown sort direction, "
                                "must be 'desc' or 'asc'"))
         try:
-            sort_key_attr = inspect(model).\
+            inspect(model).\
                 all_orm_descriptors[current_sort_key]
         except KeyError:
             raise exception.InvalidSortKey()
+        else:
+            sort_key_attr = getattr(model, current_sort_key)
+
         query = query.order_by(sort_dir_func(sort_key_attr))
 
     # Add pagination
@@ -186,6 +187,18 @@ def paginate_query(query, model, limit, sort_keys, marker=None,
         query = query.limit(limit)
 
     return query
+
+
+def to_list(x, default=None):
+    if x is None:
+        return default
+    if not isinstance(x, collections.Iterable) or \
+            isinstance(x, six.string_types):
+        return [x]
+    elif isinstance(x, list):
+        return x
+    else:
+        return list(x)
 
 
 def _read_deleted_filter(query, db_model, deleted):
@@ -346,19 +359,40 @@ def get_table(engine, name):
     return Table(name, metadata, autoload=True)
 
 
-class InsertFromSelect(UpdateBase):
-    """Form the base for `INSERT INTO table (SELECT ... )` statement."""
-    def __init__(self, table, select):
-        self.table = table
-        self.select = select
+class InsertFromSelect(object):
+    """Form the base for `INSERT INTO table (SELECT ... )` statement.
 
+    DEPRECATED: this class is deprecated and will be removed from oslo.db
+    in a few releases. Use default SQLAlchemy insert from select implementation
+    instead
 
-@compiles(InsertFromSelect)
-def visit_insert_from_select(element, compiler, **kw):
-    """Form the `INSERT INTO table (SELECT ... )` statement."""
-    return "INSERT INTO %s %s" % (
-        compiler.process(element.table, asfrom=True),
-        compiler.process(element.select))
+    :param table: table to insert records
+    :param select: select query
+    :param cols: list of columns to specify in insert clause
+    :return: SQLAlchemy :class:`Insert` object instance
+
+    Usage:
+
+    .. code-block:: python
+
+      select = sql.select(table_from)
+      insert = InsertFromSelect(table_to, select,
+                                ['id', 'name', 'insert_date'])
+      engine.execute(insert)
+
+    """
+    # NOTE(tdurakov): Insert from select implementation added to SQLAlchemy
+    # starting from version 0.8.7. Default SQLAlchemy implementation should be
+    # used instead of this. Deprecated.
+
+    def __new__(cls, table, select, cols=None):
+        if not cols:
+            cols = [c.name for c in table.c]
+
+        return table.insert(inline=True).from_select(cols, select)
+
+    def __init__(self, table, select, cols=None):
+        pass
 
 
 def _get_not_supported_column(col_name_col_instance, column_name):
