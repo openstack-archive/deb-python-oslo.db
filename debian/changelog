@@ -3,6 +3,9 @@ python-oslo.db (1.10.0-1) UNRELEASED; urgency=medium
   * Team upload.
   * New upstream release:
     - d/control: Align version requirements with upstream.
+  * Re-align with Ubuntu:
+    - d/control: Add Breaks/Replaces and transitional packages for
+      *oslo-db in Ubuntu.
 
  -- James Page <james.page@ubuntu.com>  Wed, 03 Jun 2015 11:56:06 +0100
 

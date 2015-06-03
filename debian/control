@@ -57,6 +57,8 @@ Depends: alembic (>= 0.7.2),
          python-testscenarios,
          ${misc:Depends},
          ${python:Depends},
+Breaks: python-oslo-db (<< 1.10.0-1~),
+Replaces: python-oslo-db (<< 1.10.0-1~),
 Description: database connectivity to the different backends and helper utils - Python 2.x
  The Oslo database handling library is part of the OpenStack project. It
  provides database connectivity to the different backends and also provides
@@ -76,3 +78,19 @@ Description: database connectivity to the different backends and helper utils - 
  helper utils.
  .
  This package contains the documentation.
+
+Package: python-oslo-db
+Section: oldlibs
+Architecture: all
+Depends: python-oslo.db,
+         ${misc:Depends},
+Description: transitional dummy package for python-oslo-db.
+ This transtional package is safe to remove.
+
+Package: python-oslo-db-doc
+Section: oldlibs
+Architecture: all
+Depends: python-oslo.db-doc,
+         ${misc:Depends},
+Description: transitional dummy package for python-oslo-db-doc.
+ This transtional package is safe to remove.
