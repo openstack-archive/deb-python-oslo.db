@@ -1,3 +1,11 @@
+python-oslo.db (1.10.0-1) UNRELEASED; urgency=medium
+
+  * Team upload.
+  * New upstream release:
+    - d/control: Align version requirements with upstream.
+
+ -- James Page <james.page@ubuntu.com>  Wed, 03 Jun 2015 11:56:06 +0100
+
 python-oslo.db (1.7.1-1) unstable; urgency=medium
 
   * New upstream release.
