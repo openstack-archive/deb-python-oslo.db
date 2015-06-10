@@ -1,10 +1,10 @@
-python-oslo.db (1.11.0-1) UNRELEASED; urgency=medium
+python-oslo.db (1.11.0-1) experimental; urgency=medium
 
   * Team upload.
   * New upstream release.
   * Update watch file to use pypi.debian.net.
 
- -- James Page <jamespage@debian.org>  Wed, 10 Jun 2015 11:17:43 +0100
+ -- James Page <james.page@ubuntu.com>  Wed, 10 Jun 2015 11:26:35 +0100
 
 python-oslo.db (1.10.0-1) experimental; urgency=medium
 
