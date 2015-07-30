@@ -84,6 +84,7 @@ Description: database connectivity to the different backends and helper utils - 
 
 Package: python-oslo-db
 Section: oldlibs
+Priority: extra
 Architecture: all
 Depends: python-oslo.db,
          ${misc:Depends},
@@ -92,6 +93,7 @@ Description: transitional dummy package for python-oslo-db
 
 Package: python-oslo-db-doc
 Section: oldlibs
+Priority: extra
 Architecture: all
 Depends: python-oslo.db-doc,
          ${misc:Depends},
