@@ -40,6 +40,7 @@ class ModelBaseTest(test_base.DbTestCase):
                         'get',
                         'update',
                         'save',
+                        'items',
                         'iteritems',
                         'keys')
         for method in dict_methods:
@@ -69,7 +70,19 @@ class ModelBaseTest(test_base.DbTestCase):
 
         self.assertFalse('non-existent-key' in mb)
 
-    def test_modelbase_iteritems(self):
+    def test_modelbase_contains_exc(self):
+        class ErrorModel(models.ModelBase):
+            @property
+            def bug(self):
+                raise ValueError
+
+        model = ErrorModel()
+        model.update({'attr': 5})
+
+        self.assertTrue('attr' in model)
+        self.assertRaises(ValueError, lambda: 'bug' in model)
+
+    def test_modelbase_items_iteritems(self):
         h = {'a': '1', 'b': '2'}
         expected = {
             'id': None,
@@ -79,6 +92,7 @@ class ModelBaseTest(test_base.DbTestCase):
             'b': '2',
         }
         self.ekm.update(h)
+        self.assertEqual(dict(self.ekm.items()), expected)
         self.assertEqual(dict(self.ekm.iteritems()), expected)
 
     def test_modelbase_dict(self):

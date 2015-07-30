@@ -30,6 +30,7 @@ from oslo_utils import reflection
 import six
 
 from oslo_db import exception
+from oslo_db.sqlalchemy import enginefacade
 from oslo_db.sqlalchemy import provision
 from oslo_db.sqlalchemy import session
 
@@ -78,8 +79,14 @@ class DbFixture(fixtures.Fixture):
         else:
             self.test.engine = self.test.db.engine
             self.test.sessionmaker = session.get_maker(self.test.engine)
+
         self.addCleanup(setattr, self.test, 'sessionmaker', None)
         self.addCleanup(setattr, self.test, 'engine', None)
+
+        self.test.enginefacade = enginefacade._TestTransactionFactory(
+            self.test.engine, self.test.sessionmaker, apply_global=True,
+            synchronous_reader=True)
+        self.addCleanup(self.test.enginefacade.dispose_global)
 
 
 class DbTestCase(test_base.BaseTestCase):
@@ -227,7 +234,7 @@ def optimize_db_test_loader(file_):
     Place this in an __init__.py package file within the root of the test
     suite, at the level where testresources loads it as a package::
 
-        from oslo.db.sqlalchemy import test_base
+        from oslo_db.sqlalchemy import test_base
 
         load_tests = test_base.optimize_db_test_loader(__file__)
 
