@@ -1,6 +1,7 @@
 python-oslo.db (2.4.1-1) experimental; urgency=medium
 
   * New upstream release.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 04 Sep 2015 08:43:12 +0000
 
