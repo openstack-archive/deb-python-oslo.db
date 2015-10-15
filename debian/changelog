@@ -1,3 +1,9 @@
+python-oslo.db (2.6.0-3) unstable; urgency=medium
+
+  * Uploading to unstable.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 15 Oct 2015 19:32:40 +0000
+
 python-oslo.db (2.6.0-2) experimental; urgency=medium
 
   * Added Python 3 support.
