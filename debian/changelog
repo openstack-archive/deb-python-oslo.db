@@ -1,3 +1,9 @@
+python-oslo.db (4.0.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Wed, 02 Dec 2015 15:49:05 -0500
+
 python-oslo.db (2.6.0-3) unstable; urgency=medium
 
   * Uploading to unstable.
