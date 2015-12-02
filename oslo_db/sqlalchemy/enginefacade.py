@@ -183,12 +183,12 @@ class _TransactionFactory(object):
 
         The configurational options given here act as **defaults**
         when the :class:`._TransactionFactory` is configured using
-        a :class:`.oslo.config.cfg.ConfigOpts` object; the options
-        present within the :class:`.oslo.config.cfg.ConfigOpts` **take
+        a :class:`oslo_config.cfg.ConfigOpts` object; the options
+        present within the :class:`oslo_config.cfg.ConfigOpts` **take
         precedence** versus the arguments passed here.  By default,
         the :class:`._TransactionFactory` loads in the configuration from
-        :data:`oslo.config.cfg.CONF`, after applying the
-        :data:`oslo.db.options.database_opts` configurational defaults to it.
+        :data:`oslo_config.cfg.CONF`, after applying the
+        :data:`oslo_db.options.database_opts` configurational defaults to it.
 
         .. seealso::
 
@@ -206,7 +206,7 @@ class _TransactionFactory(object):
         Behavior here is the same as that of
         :meth:`._TransactionFactory.configure_defaults`,
         with the exception that values specified here will **supersede** those
-        setup in the :class:`.oslo.config.cfg.ConfigOpts` options.
+        setup in the :class:`oslo_config.cfg.ConfigOpts` options.
 
         .. seealso::
 
@@ -569,6 +569,9 @@ class _TransactionContextTLocal(threading.local):
     def __deepcopy__(self, memo):
         return self
 
+    def __reduce__(self):
+        return _TransactionContextTLocal, ()
+
 
 class _TransactionContextManager(object):
     """Provide context-management and decorator patterns for transactions.
@@ -618,6 +621,17 @@ class _TransactionContextManager(object):
 
         """
         self._factory.configure(**kw)
+
+    def get_legacy_facade(self):
+        """Return a :class:`.LegacyEngineFacade` for factory from this context.
+
+        This facade will make use of the same engine and sessionmaker
+        as this factory, however will not share the same transaction context;
+        the legacy facade continues to work the old way of returning
+        a new Session each time get_session() is called.
+        """
+
+        return self._factory.get_legacy_facade()
 
     @property
     def replace(self):
@@ -824,7 +838,7 @@ def get_legacy_facade():
     a new Session each time get_session() is called.
 
     """
-    return _context_manager._factory.get_legacy_facade()
+    return _context_manager.get_legacy_facade()
 
 
 reader = _context_manager.reader
@@ -838,10 +852,8 @@ writer = _context_manager.writer
 class LegacyEngineFacade(object):
     """A helper class for removing of global engine instances from oslo.db.
 
-    .. deprecated::
-
-        EngineFacade is deprecated.  Please use
-        oslo.db.sqlalchemy.enginefacade for new development.
+    .. deprecated:: 1.12.0
+        Please use :mod:`oslo_db.sqlalchemy.enginefacade` for new development.
 
     As a library, oslo.db can't decide where to store/when to create engine
     and sessionmaker instances, so this must be left for a target application.
@@ -864,64 +876,62 @@ class LegacyEngineFacade(object):
        transactional context (i.e. it's not thread-safe). sessionmaker is
        a factory of sessions.
 
+    :param sql_connection: the connection string for the database to use
+    :type sql_connection: string
+
+    :param slave_connection: the connection string for the 'slave' database
+                             to use. If not provided, the master database
+                             will be used for all operations. Note: this
+                             is meant to be used for offloading of read
+                             operations to asynchronously replicated slaves
+                             to reduce the load on the master database.
+    :type slave_connection: string
+
+    :param sqlite_fk: enable foreign keys in SQLite
+    :type sqlite_fk: bool
+
+    :param autocommit: use autocommit mode for created Session instances
+    :type autocommit: bool
+
+    :param expire_on_commit: expire session objects on commit
+    :type expire_on_commit: bool
+
+    Keyword arguments:
+
+    :keyword mysql_sql_mode: the SQL mode to be used for MySQL sessions.
+                             (defaults to TRADITIONAL)
+    :keyword idle_timeout: timeout before idle sql connections are reaped
+                           (defaults to 3600)
+    :keyword connection_debug: verbosity of SQL debugging information.
+                               -1=Off, 0=None, 100=Everything (defaults
+                               to 0)
+    :keyword max_pool_size: maximum number of SQL connections to keep open
+                            in a pool (defaults to SQLAlchemy settings)
+    :keyword max_overflow: if set, use this value for max_overflow with
+                           sqlalchemy (defaults to SQLAlchemy settings)
+    :keyword pool_timeout: if set, use this value for pool_timeout with
+                           sqlalchemy (defaults to SQLAlchemy settings)
+    :keyword sqlite_synchronous: if True, SQLite uses synchronous mode
+                                 (defaults to True)
+    :keyword connection_trace: add python stack traces to SQL as comment
+                               strings (defaults to False)
+    :keyword max_retries: maximum db connection retries during startup.
+                          (setting -1 implies an infinite retry count)
+                          (defaults to 10)
+    :keyword retry_interval: interval between retries of opening a sql
+                             connection (defaults to 10)
+    :keyword thread_checkin: boolean that indicates that between each
+                             engine checkin event a sleep(0) will occur to
+                             allow other greenthreads to run (defaults to
+                             True)
+
     """
     def __init__(self, sql_connection, slave_connection=None,
                  sqlite_fk=False, autocommit=True,
                  expire_on_commit=False, _conf=None, _factory=None, **kwargs):
-        """Initialize engine and sessionmaker instances.
-
-        :param sql_connection: the connection string for the database to use
-        :type sql_connection: string
-
-        :param slave_connection: the connection string for the 'slave' database
-                                 to use. If not provided, the master database
-                                 will be used for all operations. Note: this
-                                 is meant to be used for offloading of read
-                                 operations to asynchronously replicated slaves
-                                 to reduce the load on the master database.
-        :type slave_connection: string
-
-        :param sqlite_fk: enable foreign keys in SQLite
-        :type sqlite_fk: bool
-
-        :param autocommit: use autocommit mode for created Session instances
-        :type autocommit: bool
-
-        :param expire_on_commit: expire session objects on commit
-        :type expire_on_commit: bool
-
-        Keyword arguments:
-
-        :keyword mysql_sql_mode: the SQL mode to be used for MySQL sessions.
-                                 (defaults to TRADITIONAL)
-        :keyword idle_timeout: timeout before idle sql connections are reaped
-                               (defaults to 3600)
-        :keyword connection_debug: verbosity of SQL debugging information.
-                                   -1=Off, 0=None, 100=Everything (defaults
-                                   to 0)
-        :keyword max_pool_size: maximum number of SQL connections to keep open
-                                in a pool (defaults to SQLAlchemy settings)
-        :keyword max_overflow: if set, use this value for max_overflow with
-                               sqlalchemy (defaults to SQLAlchemy settings)
-        :keyword pool_timeout: if set, use this value for pool_timeout with
-                               sqlalchemy (defaults to SQLAlchemy settings)
-        :keyword sqlite_synchronous: if True, SQLite uses synchronous mode
-                                     (defaults to True)
-        :keyword connection_trace: add python stack traces to SQL as comment
-                                   strings (defaults to False)
-        :keyword max_retries: maximum db connection retries during startup.
-                              (setting -1 implies an infinite retry count)
-                              (defaults to 10)
-        :keyword retry_interval: interval between retries of opening a sql
-                                 connection (defaults to 10)
-        :keyword thread_checkin: boolean that indicates that between each
-                                 engine checkin event a sleep(0) will occur to
-                                 allow other greenthreads to run (defaults to
-                                 True)
-        """
         warnings.warn(
             "EngineFacade is deprecated; please use "
-            "oslo.db.sqlalchemy.enginefacade",
+            "oslo_db.sqlalchemy.enginefacade",
             exception.OsloDBDeprecationWarning,
             stacklevel=2)
 
@@ -942,6 +952,10 @@ class LegacyEngineFacade(object):
                 _conf, connection=sql_connection,
                 slave_connection=slave_connection)
 
+    def _check_factory_started(self):
+        if not self._factory._started:
+            self._factory._start()
+
     def get_engine(self, use_slave=False):
         """Get the engine instance (note, that it's shared).
 
@@ -952,6 +966,7 @@ class LegacyEngineFacade(object):
         :type use_slave: bool
 
         """
+        self._check_factory_started()
         if use_slave:
             return self._factory._reader_engine
         else:
@@ -972,6 +987,7 @@ class LegacyEngineFacade(object):
         was created). See SQLAlchemy Session docs for details.
 
         """
+        self._check_factory_started()
         if use_slave:
             return self._factory._reader_maker(**kwargs)
         else:
@@ -984,6 +1000,7 @@ class LegacyEngineFacade(object):
         be temporarily injected with some state such as a specific connection.
 
         """
+        self._check_factory_started()
         if use_slave:
             return self._factory._reader_maker
         else:
@@ -995,7 +1012,7 @@ class LegacyEngineFacade(object):
         """Initialize EngineFacade using oslo.config config instance options.
 
         :param conf: oslo.config config instance
-        :type conf: oslo.config.cfg.ConfigOpts
+        :type conf: oslo_config.cfg.ConfigOpts
 
         :param sqlite_fk: enable foreign keys in SQLite
         :type sqlite_fk: bool
