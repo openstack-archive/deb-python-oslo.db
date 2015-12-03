@@ -1,11 +1,12 @@
-python-oslo.db (4.0.0-1) UNRELEASED; urgency=medium
+python-oslo.db (4.0.0-1) experimental; urgency=medium
 
+  [ Corey Bryant ]
   * New upstream release.
   * d/gbp.conf: Change debian-branch to debian/mitaka.
   * d/control: Align requirements with upstream.
   * d/control: Update uploaders.
 
- -- Corey Bryant <corey.bryant@canonical.com>  Wed, 02 Dec 2015 15:49:05 -0500
+ -- Thomas Goirand <zigo@debian.org>  Thu, 03 Dec 2015 13:41:00 +0000
 
 python-oslo.db (2.6.0-3) unstable; urgency=medium
 
