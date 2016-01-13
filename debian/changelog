@@ -2,6 +2,7 @@ python-oslo.db (4.2.0-1) experimental; urgency=medium
 
   * New upstream release.
   * Removed MANIFEST.in patch.
+  * Also run tests in Python 3.5.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 13 Jan 2016 01:55:45 +0000
 
