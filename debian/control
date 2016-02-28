@@ -62,7 +62,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
 Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-oslo.db.git
 Vcs-Git: git://anonscm.debian.org/openstack/python-oslo.db.git
-Homepage: http://launchpad.net/oslo
+Homepage: https://launchpad.net/oslo
 
 Package: python-oslo.db
 Architecture: all
