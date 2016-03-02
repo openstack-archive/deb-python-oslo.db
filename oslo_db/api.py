@@ -91,7 +91,7 @@ class wrap_db_retry(object):
     Keyword arguments:
 
     :param retry_interval: seconds between transaction retries
-    :type retry_interval: int
+    :type retry_interval: int or float
 
     :param max_retries: max number of retries before an error is raised
     :type max_retries: int
@@ -100,13 +100,14 @@ class wrap_db_retry(object):
     :type inc_retry_interval: bool
 
     :param max_retry_interval: max interval value between retries
-    :type max_retry_interval: int
+    :type max_retry_interval: int or float
 
     :param exception_checker: checks if an exception should trigger a retry
     :type exception_checker: callable
     """
 
-    def __init__(self, retry_interval=0, max_retries=0, inc_retry_interval=0,
+    def __init__(self, retry_interval=0, max_retries=0,
+                 inc_retry_interval=False,
                  max_retry_interval=0, retry_on_disconnect=False,
                  retry_on_deadlock=False, retry_on_request=False,
                  exception_checker=lambda exc: False):
@@ -139,11 +140,6 @@ class wrap_db_retry(object):
                     with excutils.save_and_reraise_exception() as ectxt:
                         if remaining > 0:
                             ectxt.reraise = not self._is_exception_expected(e)
-                            if ectxt.reraise:
-                                # We got an unexpected exception so stop
-                                # retrying, log it and raise it up to the
-                                # caller.
-                                LOG.exception(_LE('DB error.'))
                         else:
                             LOG.exception(_LE('DB exceeded retry limit.'))
                             # if it's a RetryRequest, we need to unpack it

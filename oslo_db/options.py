@@ -10,8 +10,6 @@
 #  License for the specific language governing permissions and limitations
 #  under the License.
 
-import copy
-
 from oslo_config import cfg
 
 
@@ -91,6 +89,7 @@ database_opts = [
                                                   group='DATABASE')],
                help='Interval between retries of opening a SQL connection.'),
     cfg.IntOpt('max_overflow',
+               default=50,
                deprecated_opts=[cfg.DeprecatedOpt('sql_max_overflow',
                                                   group='DEFAULT'),
                                 cfg.DeprecatedOpt('sqlalchemy_max_overflow',
@@ -219,4 +218,4 @@ def list_opts():
 
     :returns: a list of (group_name, opts) tuples
     """
-    return [('database', copy.deepcopy(database_opts))]
+    return [('database', database_opts)]
