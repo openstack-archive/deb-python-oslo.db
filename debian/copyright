@@ -1,6 +1,6 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: oslo.db
-Source: http://launchpad.net/oslo
+Source: https://launchpad.net/oslo
 
 Files: *
 Copyright: (c) 2013-2016, OpenStack Foundation <openstack-dev@lists.openstack.org>
