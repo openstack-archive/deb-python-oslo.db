@@ -1,10 +1,14 @@
-python-oslo.db (4.7.0-3) UNRELEASED; urgency=medium
+python-oslo.db (4.9.0-1) UNRELEASED; urgency=medium
 
+  [ Ondřej Nový ]
   * Standards-Version is 3.9.8 now (no change)
   * d/rules: Changed UPSTREAM_GIT protocol to https
   * d/copyright: Changed source URL to https protocol
 
- -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:29:07 +0200
+  [ Corey Bryant ]
+  * New upstream release.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Mon, 08 Aug 2016 13:23:11 -0400
 
 python-oslo.db (4.7.0-2) unstable; urgency=medium
 
