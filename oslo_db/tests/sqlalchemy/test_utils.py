@@ -24,6 +24,7 @@ from six.moves.urllib import parse
 import sqlalchemy
 from sqlalchemy.dialects import mysql
 from sqlalchemy import Boolean, Index, Integer, DateTime, String, SmallInteger
+from sqlalchemy import CheckConstraint
 from sqlalchemy import MetaData, Table, Column, ForeignKey
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine import url as sa_url
@@ -33,6 +34,7 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import select
 from sqlalchemy.types import UserDefinedType, NullType
+from sqlalchemy.dialects.postgresql import psycopg2
 
 from oslo_db import exception
 from oslo_db.sqlalchemy.compat import utils as compat_utils
@@ -482,11 +484,7 @@ class TestMigrationUtils(db_test_base.DbTestCase):
                                                     foo=fooColumn)
 
         table = utils.get_table(self.engine, table_name)
-        # NOTE(boris-42): There is no way to check has foo type CustomType.
-        #                 but sqlalchemy will set it to NullType. This has
-        #                 been fixed upstream in recent SA versions
-        if SA_VERSION < (0, 9, 0):
-            self.assertTrue(isinstance(table.c.foo.type, NullType))
+
         self.assertTrue(isinstance(table.c.deleted.type, Integer))
 
     def test_change_deleted_column_type_to_boolean(self):
@@ -537,12 +535,6 @@ class TestMigrationUtils(db_test_base.DbTestCase):
                       Column('deleted', Integer))
         table.create()
 
-        # reflection of custom types has been fixed upstream
-        if SA_VERSION < (0, 9, 0):
-            self.assertRaises(exception.ColumnError,
-                              utils.change_deleted_column_type_to_boolean,
-                              self.engine, table_name)
-
         fooColumn = Column('foo', CustomType())
         utils.change_deleted_column_type_to_boolean(self.engine, table_name,
                                                     foo=fooColumn)
@@ -554,6 +546,23 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         if SA_VERSION < (0, 9, 0):
             self.assertTrue(isinstance(table.c.foo.type, NullType))
         self.assertTrue(isinstance(table.c.deleted.type, Boolean))
+
+    def test_detect_boolean_deleted_constraint_detection(self):
+        table_name = 'abc'
+        table = Table(table_name, self.meta,
+                      Column('id', Integer, primary_key=True),
+                      Column('deleted', Boolean))
+        ck = [
+            const for const in table.constraints if
+            isinstance(const, CheckConstraint)][0]
+
+        self.assertTrue(utils._is_deleted_column_constraint(ck))
+
+        self.assertFalse(
+            utils._is_deleted_column_constraint(
+                CheckConstraint("deleted > 5")
+            )
+        )
 
     @db_test_base.backend_specific('sqlite')
     def test_change_deleted_column_type_sqlite_drops_check_constraint(self):
@@ -709,6 +718,22 @@ class TestConnectionUtils(test_utils.BaseTestCase):
                                  'passwd': 'pass'}
 
         self.connect_string = 'postgresql://dude:pass@localhost/test'
+
+        # NOTE(rpodolyaka): mock the dialect parts, so that we don't depend
+        # on psycopg2 (or any other DBAPI implementation) in these tests
+
+        @classmethod
+        def fake_dbapi(cls):
+            return mock.MagicMock()
+        patch_dbapi = mock.patch.object(psycopg2.PGDialect_psycopg2, 'dbapi',
+                                        new=fake_dbapi)
+        patch_dbapi.start()
+        self.addCleanup(patch_dbapi.stop)
+
+        patch_onconnect = mock.patch.object(psycopg2.PGDialect_psycopg2,
+                                            'on_connect')
+        patch_onconnect.start()
+        self.addCleanup(patch_onconnect.stop)
 
     def test_connect_string(self):
         connect_string = utils.get_connect_string(**self.full_credentials)

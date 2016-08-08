@@ -1,3 +1,5 @@
+#    -*- encoding: utf-8 -*-
+#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -20,6 +22,8 @@ from oslotest import base as oslo_test_base
 import six
 import sqlalchemy as sqla
 from sqlalchemy import event
+import sqlalchemy.exc
+from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapper
 
 from oslo_db import exception
@@ -45,26 +49,26 @@ class _SQLAExceptionMatcher(object):
         if isinstance(exception_type, (type, tuple)):
             self.assertTrue(issubclass(exc.__class__, exception_type))
         else:
-            self.assertEqual(exc.__class__.__name__, exception_type)
+            self.assertEqual(exception_type, exc.__class__.__name__)
         if isinstance(message, tuple):
             self.assertEqual(
+                [m.lower()
+                 if isinstance(m, six.string_types) else m for m in message],
                 [a.lower()
                  if isinstance(a, six.string_types) else a
-                 for a in exc.orig.args],
-                [m.lower()
-                 if isinstance(m, six.string_types) else m for m in message]
+                 for a in exc.orig.args]
             )
         else:
-            self.assertEqual(str(exc.orig).lower(), message.lower())
+            self.assertEqual(message.lower(), str(exc.orig).lower())
         if sql is not None:
             if params is not None:
                 if '?' in exc.statement:
-                    self.assertEqual(exc.statement, sql)
-                    self.assertEqual(exc.params, params)
+                    self.assertEqual(sql, exc.statement)
+                    self.assertEqual(params, exc.params)
                 else:
-                    self.assertEqual(exc.statement % exc.params, sql % params)
+                    self.assertEqual(sql % params, exc.statement % exc.params)
             else:
-                self.assertEqual(exc.statement, sql)
+                self.assertEqual(sql, exc.statement)
 
 
 class TestsExceptionFilter(_SQLAExceptionMatcher, oslo_test_base.BaseTestCase):
@@ -241,6 +245,138 @@ class TestFallthroughsAndNonDBAPI(TestsExceptionFilter):
             exception.DBError
         )
         self.assertEqual("mysqldb has an attribute error", matched.args[0])
+
+
+class TestNonExistentConstraint(
+        _SQLAExceptionMatcher,
+        test_base.DbTestCase):
+
+    def setUp(self):
+        super(TestNonExistentConstraint, self).setUp()
+
+        meta = sqla.MetaData(bind=self.engine)
+
+        self.table_1 = sqla.Table(
+            "resource_foo", meta,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            mysql_engine='InnoDB',
+            mysql_charset='utf8',
+        )
+        self.table_1.create()
+
+
+class TestNonExistentConstraintPostgreSQL(
+        TestNonExistentConstraint,
+        test_base.PostgreSQLOpportunisticTestCase):
+
+    def test_raise(self):
+        matched = self.assertRaises(
+            exception.DBNonExistentConstraint,
+            self.engine.execute,
+            sqla.schema.DropConstraint(
+                sqla.ForeignKeyConstraint(["id"], ["baz.id"],
+                                          name="bar_fkey",
+                                          table=self.table_1)),
+        )
+        self.assertInnerException(
+            matched,
+            "ProgrammingError",
+            "constraint \"bar_fkey\" of relation "
+            "\"resource_foo\" does not exist\n",
+            "ALTER TABLE resource_foo DROP CONSTRAINT bar_fkey",
+        )
+        self.assertEqual("resource_foo", matched.table)
+        self.assertEqual("bar_fkey", matched.constraint)
+
+
+class TestNonExistentConstraintMySQL(
+        TestNonExistentConstraint,
+        test_base.MySQLOpportunisticTestCase):
+
+    def test_raise(self):
+        matched = self.assertRaises(
+            exception.DBNonExistentConstraint,
+            self.engine.execute,
+            sqla.schema.DropConstraint(
+                sqla.ForeignKeyConstraint(["id"], ["baz.id"],
+                                          name="bar_fkey",
+                                          table=self.table_1)),
+        )
+        # NOTE(jd) Cannot check precisely with assertInnerException since MySQL
+        # error are not the same depending on its version…
+        self.assertIsInstance(matched.inner_exception,
+                              sqlalchemy.exc.InternalError)
+        if matched.table is not None:
+            self.assertEqual("resource_foo", matched.table)
+        if matched.constraint is not None:
+            self.assertEqual("bar_fkey", matched.constraint)
+
+
+class TestNonExistentTable(
+        _SQLAExceptionMatcher,
+        test_base.DbTestCase):
+
+    def setUp(self):
+        super(TestNonExistentTable, self).setUp()
+
+        self.meta = sqla.MetaData(bind=self.engine)
+
+        self.table_1 = sqla.Table(
+            "foo", self.meta,
+            sqla.Column("id", sqla.Integer, primary_key=True),
+            mysql_engine='InnoDB',
+            mysql_charset='utf8',
+        )
+
+    def test_raise(self):
+        matched = self.assertRaises(
+            exception.DBNonExistentTable,
+            self.engine.execute,
+            sqla.schema.DropTable(self.table_1),
+        )
+        self.assertInnerException(
+            matched,
+            "OperationalError",
+            "no such table: foo",
+            "\nDROP TABLE foo",
+        )
+        self.assertEqual("foo", matched.table)
+
+
+class TestNonExistentTablePostgreSQL(
+        TestNonExistentTable,
+        test_base.PostgreSQLOpportunisticTestCase):
+
+    def test_raise(self):
+        matched = self.assertRaises(
+            exception.DBNonExistentTable,
+            self.engine.execute,
+            sqla.schema.DropTable(self.table_1),
+        )
+        self.assertInnerException(
+            matched,
+            "ProgrammingError",
+            "table \"foo\" does not exist\n",
+            "\nDROP TABLE foo",
+        )
+        self.assertEqual("foo", matched.table)
+
+
+class TestNonExistentTableMySQL(
+        TestNonExistentTable,
+        test_base.MySQLOpportunisticTestCase):
+
+    def test_raise(self):
+        matched = self.assertRaises(
+            exception.DBNonExistentTable,
+            self.engine.execute,
+            sqla.schema.DropTable(self.table_1),
+        )
+        # NOTE(jd) Cannot check precisely with assertInnerException since MySQL
+        # error are not the same depending on its version…
+        self.assertIsInstance(matched.inner_exception,
+                              sqlalchemy.exc.InternalError)
+        self.assertEqual("foo", matched.table)
 
 
 class TestReferenceErrorSQLite(_SQLAExceptionMatcher, test_base.DbTestCase):
@@ -452,6 +588,109 @@ class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
         self.assertEqual("resource_foo", matched.key_table)
 
 
+class TestExceptionCauseMySQLSavepoint(test_base.MySQLOpportunisticTestCase):
+    def setUp(self):
+        super(TestExceptionCauseMySQLSavepoint, self).setUp()
+
+        Base = declarative_base()
+
+        class A(Base):
+            __tablename__ = 'a'
+
+            id = sqla.Column(sqla.Integer, primary_key=True)
+
+            __table_args__ = {'mysql_engine': 'InnoDB'}
+
+        Base.metadata.create_all(self.engine)
+
+        self.A = A
+
+    def test_cause_for_failed_flush_plus_no_savepoint(self):
+        session = self.sessionmaker()
+
+        with session.begin():
+            session.add(self.A(id=1))
+        try:
+
+            with session.begin():
+
+                try:
+                    with session.begin_nested():
+                        session.execute("rollback")
+                        session.add(self.A(id=1))
+
+                # outermost is the failed SAVEPOINT rollback
+                # from the "with session.begin_nested()"
+                except exception.DBError as dbe_inner:
+
+                    # first "cause" is the failed SAVEPOINT rollback
+                    # from inside of flush(), when it fails
+                    self.assertTrue(
+                        isinstance(
+                            dbe_inner.cause,
+                            exception.DBError
+                        )
+                    )
+
+                    # second "cause" is then the actual DB duplicate
+                    self.assertTrue(
+                        isinstance(
+                            dbe_inner.cause.cause,
+                            exception.DBDuplicateEntry
+                        )
+                    )
+        except exception.DBError as dbe_outer:
+            self.assertTrue(
+                isinstance(
+                    dbe_outer.cause,
+                    exception.DBDuplicateEntry
+                )
+            )
+
+        # resets itself afterwards
+        try:
+            with session.begin():
+                session.add(self.A(id=1))
+        except exception.DBError as dbe_outer:
+            self.assertIsNone(dbe_outer.cause)
+
+
+class TestDBDataErrorSQLite(_SQLAExceptionMatcher, test_base.DbTestCase):
+
+    def setUp(self):
+        super(TestDBDataErrorSQLite, self).setUp()
+
+        if six.PY3:
+            self.skip("SQLite database supports unicode value for python3")
+
+        meta = sqla.MetaData(bind=self.engine)
+
+        self.table_1 = sqla.Table(
+            "resource_foo", meta,
+            sqla.Column("name", sqla.String),
+        )
+        self.table_1.create()
+
+    def test_raise(self):
+
+        matched = self.assertRaises(
+            exception.DBDataError,
+            self.engine.execute,
+            self.table_1.insert({'name': u'\u2713'.encode('utf-8')})
+        )
+
+        self.assertInnerException(
+            matched,
+            "ProgrammingError",
+            "You must not use 8-bit bytestrings unless you use a "
+            "text_factory that can interpret 8-bit bytestrings "
+            "(like text_factory = str). It is highly recommended that "
+            "you instead just switch your application to Unicode strings.",
+            "INSERT INTO resource_foo (name) VALUES (?)",
+            (u'\u2713'.encode('utf-8'),)
+        )
+
+
 class TestConstraint(TestsExceptionFilter):
     def test_postgresql(self):
         matched = self._run_test(
@@ -511,6 +750,10 @@ class TestDuplicate(TestsExceptionFilter):
             "mysql",
             '(1062, "Duplicate entry '
             '\'2-3\' for key \'uniq_tbl0a0b\'")', expected_value='2-3')
+        self._run_dupe_constraint_test(
+            "mysql",
+            '(1062, "Duplicate entry '
+            '\'\' for key \'uniq_tbl0a0b\'")', expected_value='')
 
     def test_mysql_mysqlconnector(self):
         self._run_dupe_constraint_test(

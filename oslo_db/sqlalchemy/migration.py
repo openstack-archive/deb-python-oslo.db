@@ -68,8 +68,7 @@ def db_sync(engine, abs_path, version=None, init_version=0, sanity_check=True):
         try:
             version = int(version)
         except ValueError:
-            raise exception.DbMigrationError(
-                message=_("version should be an integer"))
+            raise exception.DBMigrationError(_("version should be an integer"))
 
     current_version = db_version(engine, abs_path, init_version)
     repository = _find_migrate_repo(abs_path)
@@ -119,7 +118,7 @@ def db_version(engine, abs_path, init_version):
 
     :param engine:  SQLAlchemy engine instance for a given database
     :param abs_path: Absolute path to migrate repository
-    :param version:  Initial database version
+    :param init_version:  Initial database version
     """
     repository = _find_migrate_repo(abs_path)
     try:
@@ -132,11 +131,10 @@ def db_version(engine, abs_path, init_version):
             db_version_control(engine, abs_path, version=init_version)
             return versioning_api.db_version(engine, repository)
         else:
-            raise exception.DbMigrationError(
-                message=_(
-                    "The database is not under version control, but has "
-                    "tables. Please stamp the current version of the schema "
-                    "manually."))
+            raise exception.DBMigrationError(
+                _("The database is not under version control, but has "
+                  "tables. Please stamp the current version of the schema "
+                  "manually."))
 
 
 def db_version_control(engine, abs_path, version=None):
@@ -150,7 +148,14 @@ def db_version_control(engine, abs_path, version=None):
     :param version:  Initial database version
     """
     repository = _find_migrate_repo(abs_path)
-    versioning_api.version_control(engine, repository, version)
+
+    try:
+        versioning_api.version_control(engine, repository, version)
+    except versioning_exceptions.InvalidVersionError as ex:
+        raise exception.DBMigrationError("Invalid version : %s" % ex)
+    except versioning_exceptions.DatabaseAlreadyControlledError:
+        raise exception.DBMigrationError("Database is already controlled.")
+
     return version
 
 
@@ -160,5 +165,5 @@ def _find_migrate_repo(abs_path):
     :param abs_path: Absolute path to migrate repository
     """
     if not os.path.exists(abs_path):
-        raise exception.DbMigrationError("Path %s not found" % abs_path)
+        raise exception.DBMigrationError("Path %s not found" % abs_path)
     return Repository(abs_path)

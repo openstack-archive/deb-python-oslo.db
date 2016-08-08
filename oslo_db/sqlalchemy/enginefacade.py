@@ -13,6 +13,7 @@
 
 import contextlib
 import functools
+import inspect
 import operator
 import threading
 import warnings
@@ -141,7 +142,9 @@ class _TransactionFactory(object):
             'connection_trace': _Default(False),
             'max_retries': _Default(10),
             'retry_interval': _Default(10),
-            'thread_checkin': _Default(True)
+            'thread_checkin': _Default(True),
+            'json_serializer': _Default(None),
+            'json_deserializer': _Default(None),
         }
         self._maker_cfg = {
             'expire_on_commit': _Default(False),
@@ -304,6 +307,16 @@ class _TransactionFactory(object):
 
     def _maker_args_for_conf(self, conf):
         return self._args_for_conf(self._maker_cfg, conf)
+
+    def dispose_pool(self):
+        """Call engine.pool.dispose() on underlying Engine objects."""
+        with self._start_lock:
+            if not self._started:
+                return
+
+            self._writer_engine.pool.dispose()
+            if self._reader_engine is not self._writer_engine:
+                self._reader_engine.pool.dispose()
 
     def _start(self, conf=False, connection=None, slave_connection=None):
         with self._start_lock:
@@ -516,7 +529,7 @@ class _TransactionContext(object):
             session.commit()
         elif self.rollback_reader_sessions:
             session.rollback()
-        # In the absense of calling session.rollback(),
+        # In the absence of calling session.rollback(),
         # the next call is session.close().  This releases all
         # objects from the session into the detached state, and
         # releases the connection as well; the connection when returned
@@ -635,6 +648,10 @@ class _TransactionContextManager(object):
 
         return self._factory.get_legacy_facade()
 
+    def dispose_pool(self):
+        """Call engine.pool.dispose() on underlying Engine objects."""
+        self._factory.dispose_pool()
+
     @property
     def replace(self):
         """Modifier to replace the global transaction factory with this one."""
@@ -700,10 +717,15 @@ class _TransactionContextManager(object):
 
     def __call__(self, fn):
         """Decorate a function."""
+        argspec = inspect.getargspec(fn)
+        if argspec.args[0] == 'self' or argspec.args[0] == 'cls':
+            context_index = 1
+        else:
+            context_index = 0
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            context = args[0]
+            context = args[context_index]
 
             with self._transaction_scope(context):
                 return fn(*args, **kwargs)
@@ -1006,7 +1028,7 @@ class LegacyEngineFacade(object):
                           (defaults to False)
         :type use_slave: bool
 
-        Keyword arugments will be passed to a sessionmaker instance as is (if
+        Keyword arguments will be passed to a sessionmaker instance as is (if
         passed, they will override the ones used when the sessionmaker instance
         was created). See SQLAlchemy Session docs for details.
 

@@ -47,9 +47,10 @@ import debtcollector.removals
 import six
 
 from oslo_db._i18n import _
+from oslo_utils.excutils import CausedByException
 
 
-class DBError(Exception):
+class DBError(CausedByException):
 
     """Base exception for all custom database exceptions.
 
@@ -57,9 +58,9 @@ class DBError(Exception):
         DBError or its subclasses.
     """
 
-    def __init__(self, inner_exception=None):
+    def __init__(self, inner_exception=None, cause=None):
         self.inner_exception = inner_exception
-        super(DBError, self).__init__(six.text_type(inner_exception))
+        super(DBError, self).__init__(six.text_type(inner_exception), cause)
 
 
 class DBDuplicateEntry(DBError):
@@ -127,6 +128,33 @@ class DBReferenceError(DBError):
         super(DBReferenceError, self).__init__(inner_exception)
 
 
+class DBNonExistentConstraint(DBError):
+    """Constraint does not exist.
+
+    :param table: table name
+    :type table: str
+    :param constraint: constraint name
+    :type table: str
+    """
+
+    def __init__(self, table, constraint, inner_exception=None):
+        self.table = table
+        self.constraint = constraint
+        super(DBNonExistentConstraint, self).__init__(inner_exception)
+
+
+class DBNonExistentTable(DBError):
+    """Table does not exist.
+
+    :param table: table name
+    :type table: str
+    """
+
+    def __init__(self, table, inner_exception=None):
+        self.table = table
+        super(DBNonExistentTable, self).__init__(inner_exception)
+
+
 class DBDeadlock(DBError):
 
     """Database dead lock error.
@@ -169,6 +197,20 @@ class DbMigrationError(DBError):
 
     def __init__(self, message=None):
         super(DbMigrationError, self).__init__(message)
+
+
+class DBMigrationError(DbMigrationError):
+
+    """Wrapped migration specific exception.
+
+    Raised when migrations couldn't be completed successfully.
+    """
+    def __init__(self, message):
+        super(DBMigrationError, self).__init__(message)
+
+
+debtcollector.removals.removed_class(DbMigrationError,
+                                     replacement=DBMigrationError)
 
 
 class DBConnectionError(DBError):

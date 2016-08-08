@@ -62,6 +62,7 @@ class SingletonEngine(SingletonOnName):
         super(SingletonEngine, self).__init__(
             "engine",
             connect=mock.Mock(return_value=connection),
+            pool=mock.Mock(),
             url=connection,
             _assert_connection=connection,
             **kw
@@ -416,6 +417,48 @@ class MockFacadeTest(oslo_test_base.BaseTestCase):
             self.assertEqual(
                 session.mock_calls,
                 self.sessions.element_for_writer(writer).mock_calls)
+
+    def test_dispose_pool(self):
+        facade = enginefacade.transaction_context()
+
+        facade.configure(
+            connection=self.engine_uri,
+            )
+
+        facade.dispose_pool()
+        self.assertFalse(hasattr(facade._factory, '_writer_engine'))
+
+        facade._factory._start()
+        facade.dispose_pool()
+
+        self.assertEqual(
+            facade._factory._writer_engine.pool.mock_calls,
+            [mock.call.dispose()]
+        )
+
+    def test_dispose_pool_w_reader(self):
+        facade = enginefacade.transaction_context()
+
+        facade.configure(
+            connection=self.engine_uri,
+            slave_connection=self.slave_uri
+        )
+
+        facade.dispose_pool()
+        self.assertFalse(hasattr(facade._factory, '_writer_engine'))
+        self.assertFalse(hasattr(facade._factory, '_reader_engine'))
+
+        facade._factory._start()
+        facade.dispose_pool()
+
+        self.assertEqual(
+            facade._factory._writer_engine.pool.mock_calls,
+            [mock.call.dispose()]
+        )
+        self.assertEqual(
+            facade._factory._reader_engine.pool.mock_calls,
+            [mock.call.dispose()]
+        )
 
     def test_session_reader_decorator(self):
         context = oslo_context.RequestContext()
@@ -1003,6 +1046,34 @@ class MockFacadeTest(oslo_test_base.BaseTestCase):
             exception.NoEngineContextEstablished,
             getattr, context, 'transaction_ctx'
         )
+
+    def test_context_found_for_bound_method(self):
+        context = oslo_context.RequestContext()
+
+        @enginefacade.reader
+        def go(self, context):
+            context.session.execute("test")
+        go(self, context)
+
+        with self._assert_engines() as engines:
+            with self._assert_makers(engines) as makers:
+                with self._assert_reader_session(makers) as session:
+                    session.execute("test")
+
+    def test_context_found_for_class_method(self):
+        context = oslo_context.RequestContext()
+
+        class Spam(object):
+            @classmethod
+            @enginefacade.reader
+            def go(cls, context):
+                context.session.execute("test")
+        Spam.go(context)
+
+        with self._assert_engines() as engines:
+            with self._assert_makers(engines) as makers:
+                with self._assert_reader_session(makers) as session:
+                    session.execute("test")
 
 
 class SynchronousReaderWSlaveMockFacadeTest(MockFacadeTest):

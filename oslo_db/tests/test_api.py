@@ -123,7 +123,8 @@ class DBReconnectTestCase(DBAPITestCase):
                           self.dbapi.api_raise_default)
         self.assertEqual(4, self.test_db_api.error_counter, 'Unexpected retry')
 
-    def test_retry_one(self):
+    @mock.patch('oslo_db.api.time.sleep', return_value=None)
+    def test_retry_one(self, p_time_sleep):
         self.dbapi = api.DBAPI('sqlalchemy',
                                {'sqlalchemy': __name__},
                                use_db_reconnect=True,
@@ -135,12 +136,13 @@ class DBReconnectTestCase(DBAPITestCase):
             self.assertTrue(func(), 'Single retry did not succeed.')
         except Exception:
             self.fail('Single retry raised an un-wrapped error.')
-
+        p_time_sleep.assert_called_with(1)
         self.assertEqual(
             0, self.test_db_api.error_counter,
             'Counter not decremented, retry logic probably failed.')
 
-    def test_retry_two(self):
+    @mock.patch('oslo_db.api.time.sleep', return_value=None)
+    def test_retry_two(self, p_time_sleep):
         self.dbapi = api.DBAPI('sqlalchemy',
                                {'sqlalchemy': __name__},
                                use_db_reconnect=True,
@@ -153,12 +155,31 @@ class DBReconnectTestCase(DBAPITestCase):
             self.assertTrue(func(), 'Multiple retry did not succeed.')
         except Exception:
             self.fail('Multiple retry raised an un-wrapped error.')
-
+        p_time_sleep.assert_called_with(1)
         self.assertEqual(
             0, self.test_db_api.error_counter,
             'Counter not decremented, retry logic probably failed.')
 
-    def test_retry_until_failure(self):
+    @mock.patch('oslo_db.api.time.sleep', return_value=None)
+    def test_retry_float_interval(self, p_time_sleep):
+        self.dbapi = api.DBAPI('sqlalchemy',
+                               {'sqlalchemy': __name__},
+                               use_db_reconnect=True,
+                               retry_interval=0.5)
+        try:
+            func = self.dbapi.api_raise_enable_retry
+            self.test_db_api.error_counter = 1
+            self.assertTrue(func(), 'Single retry did not succeed.')
+        except Exception:
+            self.fail('Single retry raised an un-wrapped error.')
+
+        p_time_sleep.assert_called_with(0.5)
+        self.assertEqual(
+            0, self.test_db_api.error_counter,
+            'Counter not decremented, retry logic probably failed.')
+
+    @mock.patch('oslo_db.api.time.sleep', return_value=None)
+    def test_retry_until_failure(self, p_time_sleep):
         self.dbapi = api.DBAPI('sqlalchemy',
                                {'sqlalchemy': __name__},
                                use_db_reconnect=True,
@@ -171,7 +192,7 @@ class DBReconnectTestCase(DBAPITestCase):
         self.assertRaises(
             exception.DBError, func,
             'Retry of permanent failure did not throw DBError exception.')
-
+        p_time_sleep.assert_called_with(1)
         self.assertNotEqual(
             0, self.test_db_api.error_counter,
             'Retry did not stop after sql_max_retries iterations.')
@@ -179,16 +200,16 @@ class DBReconnectTestCase(DBAPITestCase):
 
 class DBRetryRequestCase(DBAPITestCase):
     def test_retry_wrapper_succeeds(self):
-        @api.wrap_db_retry(max_retries=10, retry_on_request=True)
+        @api.wrap_db_retry(max_retries=10)
         def some_method():
             pass
 
         some_method()
 
     def test_retry_wrapper_reaches_limit(self):
-        max_retries = 10
+        max_retries = 2
 
-        @api.wrap_db_retry(max_retries=10, retry_on_request=True)
+        @api.wrap_db_retry(max_retries=max_retries)
         def some_method(res):
             res['result'] += 1
             raise exception.RetryRequest(ValueError())
@@ -202,7 +223,7 @@ class DBRetryRequestCase(DBAPITestCase):
         def exception_checker(exc):
             return isinstance(exc, ValueError) and exc.args[0] < 5
 
-        @api.wrap_db_retry(max_retries=10, retry_on_request=True,
+        @api.wrap_db_retry(max_retries=10,
                            exception_checker=exception_checker)
         def some_method(res):
             res['result'] += 1

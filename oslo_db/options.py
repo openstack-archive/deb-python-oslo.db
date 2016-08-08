@@ -15,6 +15,9 @@ from oslo_config import cfg
 
 database_opts = [
     cfg.StrOpt('sqlite_db',
+               deprecated_for_removal=True,
+               deprecated_reason='Should use config option connection or '
+                                 'slave_connection to connect the database.',
                deprecated_group='DEFAULT',
                default='oslo.sqlite',
                help='The file name to use with SQLite.'),
@@ -66,12 +69,13 @@ database_opts = [
                help='Minimum number of SQL connections to keep open in a '
                     'pool.'),
     cfg.IntOpt('max_pool_size',
+               default=5,
                deprecated_opts=[cfg.DeprecatedOpt('sql_max_pool_size',
                                                   group='DEFAULT'),
                                 cfg.DeprecatedOpt('sql_max_pool_size',
                                                   group='DATABASE')],
                help='Maximum number of SQL connections to keep open in a '
-                    'pool.'),
+                    'pool. Setting a value of 0 indicates no limit.'),
     cfg.IntOpt('max_retries',
                default=10,
                deprecated_opts=[cfg.DeprecatedOpt('sql_max_retries',
@@ -98,6 +102,7 @@ database_opts = [
                     'SQLAlchemy.'),
     cfg.IntOpt('connection_debug',
                default=0,
+               min=0, max=100,
                deprecated_opts=[cfg.DeprecatedOpt('sql_connection_debug',
                                                   group='DEFAULT')],
                help='Verbosity of SQL debugging information: 0=None, '
@@ -160,13 +165,12 @@ def set_defaults(conf, connection=None, sqlite_db=None,
     :type sqlite_db: str
 
     :keyword max_pool_size: maximum connections pool size. The size of the pool
-     to be maintained, defaults to 5, will be used if value of the parameter is
-     `None`. This is the largest number of connections that will be kept
-     persistently in the pool. Note that the pool begins with no connections;
-     once this number of connections is requested, that number of connections
-     will remain.
+     to be maintained, defaults to 5. This is the largest number of connections
+     that will be kept persistently in the pool. Note that the pool begins with
+     no connections; once this number of connections is requested, that number
+     of connections will remain.
     :type max_pool_size: int
-    :default max_pool_size: None
+    :default max_pool_size: 5
 
     :keyword max_overflow: The maximum overflow size of the pool. When the
      number of checked-out connections reaches the size set in pool_size,

@@ -18,6 +18,7 @@
 """Unit tests for SQLAlchemy specific code."""
 
 import logging
+import os
 
 import fixtures
 import mock
@@ -348,6 +349,8 @@ class EngineFacadeTestCase(oslo_test.BaseTestCase):
             sqlite_synchronous=mock.ANY,
             pool_timeout=mock.ANY,
             thread_checkin=mock.ANY,
+            json_serializer=None,
+            json_deserializer=None,
         )
         get_maker.assert_called_once_with(engine=create_engine(),
                                           autocommit=False,
@@ -717,4 +720,5 @@ class PatchStacktraceTest(test_base.DbTestCase):
             call = mock_exec.mock_calls[0]
 
             # we're the caller, see that we're in there
-            self.assertIn("tests/sqlalchemy/test_sqlalchemy.py", call[1][1])
+            caller = os.path.join("tests", "sqlalchemy", "test_sqlalchemy.py")
+            self.assertIn(caller, call[1][1])

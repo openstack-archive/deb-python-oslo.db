@@ -27,6 +27,7 @@ import logging
 import threading
 import time
 
+from debtcollector import removals
 from oslo_utils import excutils
 from oslo_utils import importutils
 from oslo_utils import reflection
@@ -106,22 +107,22 @@ class wrap_db_retry(object):
     :type exception_checker: callable
     """
 
-    def __init__(self, retry_interval=0, max_retries=0,
-                 inc_retry_interval=False,
-                 max_retry_interval=0, retry_on_disconnect=False,
+    @removals.removed_kwarg("retry_on_request",
+                            "Retry on request is always enabled")
+    def __init__(self, retry_interval=1, max_retries=20,
+                 inc_retry_interval=True,
+                 max_retry_interval=10, retry_on_disconnect=False,
                  retry_on_deadlock=False, retry_on_request=False,
                  exception_checker=lambda exc: False):
         super(wrap_db_retry, self).__init__()
 
-        self.db_error = ()
+        self.db_error = (exception.RetryRequest, )
         # default is that we re-raise anything unexpected
         self.exception_checker = exception_checker
         if retry_on_disconnect:
             self.db_error += (exception.DBConnectionError, )
         if retry_on_deadlock:
             self.db_error += (exception.DBDeadlock, )
-        if retry_on_request:
-            self.db_error += (exception.RetryRequest, )
         self.retry_interval = retry_interval
         self.max_retries = max_retries
         self.inc_retry_interval = inc_retry_interval
@@ -138,10 +139,12 @@ class wrap_db_retry(object):
                     return f(*args, **kwargs)
                 except Exception as e:
                     with excutils.save_and_reraise_exception() as ectxt:
+                        expected = self._is_exception_expected(e)
                         if remaining > 0:
-                            ectxt.reraise = not self._is_exception_expected(e)
+                            ectxt.reraise = not expected
                         else:
-                            LOG.exception(_LE('DB exceeded retry limit.'))
+                            if expected:
+                                LOG.exception(_LE('DB exceeded retry limit.'))
                             # if it's a RetryRequest, we need to unpack it
                             if isinstance(e, exception.RetryRequest):
                                 ectxt.type_ = type(e.inner_exc)
@@ -218,10 +221,11 @@ class DBAPI(object):
             self._load_backend()
 
         self.use_db_reconnect = kwargs.get('use_db_reconnect', False)
-        self.retry_interval = kwargs.get('retry_interval', 1)
-        self.inc_retry_interval = kwargs.get('inc_retry_interval', True)
-        self.max_retry_interval = kwargs.get('max_retry_interval', 10)
-        self.max_retries = kwargs.get('max_retries', 20)
+        self._wrap_db_kwargs = {k: v for k, v in kwargs.items()
+                                if k in ('retry_interval',
+                                         'inc_retry_interval',
+                                         'max_retry_interval',
+                                         'max_retries')}
 
     def _load_backend(self):
         with self._lock:
@@ -253,13 +257,9 @@ class DBAPI(object):
 
         if retry_on_disconnect or retry_on_deadlock or retry_on_request:
             attr = wrap_db_retry(
-                retry_interval=self.retry_interval,
-                max_retries=self.max_retries,
-                inc_retry_interval=self.inc_retry_interval,
-                max_retry_interval=self.max_retry_interval,
                 retry_on_disconnect=retry_on_disconnect,
                 retry_on_deadlock=retry_on_deadlock,
-                retry_on_request=retry_on_request)(attr)
+                **self._wrap_db_kwargs)(attr)
 
         return attr
 

@@ -14,12 +14,13 @@
 import collections
 import logging
 import re
+import sys
 
+from sqlalchemy import event
 from sqlalchemy import exc as sqla_exc
 
 from oslo_db._i18n import _LE
 from oslo_db import exception
-from oslo_db.sqlalchemy import compat
 
 
 LOG = logging.getLogger(__name__)
@@ -91,11 +92,11 @@ def _deadlock_error(operational_error, match, engine_name, is_disconnect):
 
 
 @filters("mysql", sqla_exc.IntegrityError,
-         r"^.*\b1062\b.*Duplicate entry '(?P<value>.+)'"
+         r"^.*\b1062\b.*Duplicate entry '(?P<value>.*)'"
          r" for key '(?P<columns>[^']+)'.*$")
 # NOTE(jd) For binary types
 @filters("mysql", sqla_exc.IntegrityError,
-         r"^.*\b1062\b.*Duplicate entry \\'(?P<value>.+)\\'"
+         r"^.*\b1062\b.*Duplicate entry \\'(?P<value>.*)\\'"
          r" for key \\'(?P<columns>.+)\\'.*$")
 # NOTE(pkholkin): the first regex is suitable only for PostgreSQL 9.x versions
 #                 the second regex is suitable for PostgreSQL 8.x versions
@@ -244,6 +245,46 @@ def _check_constraint_error(
     raise exception.DBConstraintError(table, check_name, integrity_error)
 
 
+@filters("postgresql", sqla_exc.ProgrammingError,
+         r".* constraint \"(?P<constraint>.+)\" "
+         "of relation "
+         "\"(?P<relation>.+)\" does not exist")
+@filters("mysql", sqla_exc.InternalError,
+         r".*1091,.*Can't DROP '(?P<constraint>.+)'; "
+         "check that column/key exists")
+@filters("mysql", sqla_exc.InternalError,
+         r".*1025,.*Error on rename of '.+/(?P<relation>.+)' to ")
+def _check_constraint_non_existing(
+        programming_error, match, engine_name, is_disconnect):
+    """Filter for constraint non existing errors."""
+
+    try:
+        relation = match.group("relation")
+    except IndexError:
+        relation = None
+
+    try:
+        constraint = match.group("constraint")
+    except IndexError:
+        constraint = None
+
+    raise exception.DBNonExistentConstraint(relation,
+                                            constraint,
+                                            programming_error)
+
+
+@filters("sqlite", sqla_exc.OperationalError,
+         r".* no such table: (?P<table>.+)")
+@filters("mysql", sqla_exc.InternalError,
+         r".*1051,.*\"Unknown table '(.+\.)?(?P<table>.+)'\"")
+@filters("postgresql", sqla_exc.ProgrammingError,
+         r".* table \"(?P<table>.+)\" does not exist")
+def _check_table_non_existing(
+        programming_error, match, engine_name, is_disconnect):
+    """Filter for table non existing errors."""
+    raise exception.DBNonExistentTable(match.group("table"), programming_error)
+
+
 @filters("ibm_db_sa", sqla_exc.IntegrityError, r"^.*SQL0803N.*$")
 def _db2_dupe_key_error(integrity_error, match, engine_name, is_disconnect):
     """Filter for DB2 duplicate key errors.
@@ -282,6 +323,8 @@ def _raise_mysql_table_doesnt_exist_asis(
          r".*1264.*Out of range value for column.*")
 @filters("mysql", sqla_exc.InternalError,
          r"^.*1366.*Incorrect string value:*")
+@filters("sqlite", sqla_exc.ProgrammingError,
+         r"(?i).*You must not use 8-bit bytestrings*")
 def _raise_data_error(error, match, engine_name, is_disconnect):
     """Raise DBDataError exception for different data errors."""
 
@@ -341,6 +384,8 @@ def _raise_for_all_others(error, match, engine_name, is_disconnect):
     LOG.exception(_LE('DB exception wrapped.'))
     raise exception.DBError(error)
 
+ROLLBACK_CAUSE_KEY = 'oslo.db.sp_rollback_cause'
+
 
 def handler(context):
     """Iterate through available filters and invoke those which match.
@@ -374,13 +419,52 @@ def handler(context):
                                     match,
                                     context.engine.dialect.name,
                                     context.is_disconnect)
-                            except exception.DBConnectionError:
-                                context.is_disconnect = True
+                            except exception.DBError as dbe:
+                                if (
+                                    context.connection is not None and
+                                    not context.connection.closed and
+                                    not context.connection.invalidated and
+                                    ROLLBACK_CAUSE_KEY
+                                    in context.connection.info
+                                ):
+                                    dbe.cause = \
+                                        context.connection.info.pop(
+                                            ROLLBACK_CAUSE_KEY)
+
+                                if isinstance(
+                                        dbe, exception.DBConnectionError):
+                                    context.is_disconnect = True
                                 raise
 
 
 def register_engine(engine):
-    compat.handle_error(engine, handler)
+    event.listen(engine, "handle_error", handler)
+
+    @event.listens_for(engine, "rollback_savepoint")
+    def rollback_savepoint(conn, name, context):
+        exc_info = sys.exc_info()
+        if exc_info[1]:
+            conn.info[ROLLBACK_CAUSE_KEY] = exc_info[1]
+        # NOTE(zzzeek) this eliminates a reference cycle between tracebacks
+        # that would occur in Python 3 only, which has been shown to occur if
+        # this function were in fact part of the traceback.  That's not the
+        # case here however this is left as a defensive measure.
+        del exc_info
+
+    # try to clear the "cause" ASAP outside of savepoints,
+    # by grabbing the end of transaction events...
+    @event.listens_for(engine, "rollback")
+    @event.listens_for(engine, "commit")
+    def pop_exc_tx(conn):
+        conn.info.pop(ROLLBACK_CAUSE_KEY, None)
+
+    # .. as well as connection pool checkin (just in case).
+    # the .info dictionary lasts as long as the DBAPI connection itself
+    # and is cleared out when the connection is recycled or closed
+    # due to invalidate etc.
+    @event.listens_for(engine, "checkin")
+    def pop_exc_checkin(dbapi_conn, connection_record):
+        connection_record.info.pop(ROLLBACK_CAUSE_KEY, None)
 
 
 def handle_connect_error(engine):
