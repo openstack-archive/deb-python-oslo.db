@@ -9,6 +9,7 @@ python-oslo.db (4.9.0-1) UNRELEASED; urgency=medium
   * New upstream release.
   * d/gbp.conf: Update debian-branch for Newton.
   * .gitreview: Copy file from orig tar.
+  * d/control: Align (Build-)Depends with upstream.
 
  -- Corey Bryant <corey.bryant@canonical.com>  Mon, 08 Aug 2016 13:23:11 -0400
 
