@@ -1,0 +1,9 @@
+Code-Review+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Workflow+1: Doug Hellmann <doug@doughellmann.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 16 Mar 2015 19:35:15 +0000
+Reviewed-on: https://review.openstack.org/164767
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/kilo

@@ -1,0 +1,10 @@
+Code-Review+1: Viktor Serhieiev <viktor.sergeyev@gmail.com>
+Code-Review+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Workflow+1: Doug Hellmann <doug@doughellmann.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 01 Oct 2014 16:45:01 +0000
+Reviewed-on: https://review.openstack.org/125079
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/juno
