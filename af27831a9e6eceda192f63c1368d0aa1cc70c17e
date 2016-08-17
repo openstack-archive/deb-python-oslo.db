@@ -1,0 +1,9 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 11 Aug 2016 12:52:34 +0000
+Reviewed-on: https://review.openstack.org/350788
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
