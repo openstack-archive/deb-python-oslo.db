@@ -1,0 +1,9 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Workflow+1: Doug Hellmann <doug@doughellmann.com>
+Code-Review+1: Jeremy Stanley <fungi@yuggoth.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 16 Dec 2014 05:12:44 +0000
+Reviewed-on: https://review.openstack.org/141893
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/feature/1.2
