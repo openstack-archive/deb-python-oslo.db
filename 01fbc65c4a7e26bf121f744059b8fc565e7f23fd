@@ -1,0 +1,8 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 19 Apr 2016 12:26:18 +0000
+Reviewed-on: https://review.openstack.org/307273
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/mitaka

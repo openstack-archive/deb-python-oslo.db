@@ -1,0 +1,9 @@
+Code-Review+2: Alexis Lee <lxsli@hpe.com>
+Code-Review+2: Joshua Harlow <jxharlow@godaddy.com>
+Workflow+1: Joshua Harlow <jxharlow@godaddy.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 11 May 2016 01:58:25 +0000
+Reviewed-on: https://review.openstack.org/311329
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/mitaka
