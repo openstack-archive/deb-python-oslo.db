@@ -1,0 +1,9 @@
+Code-Review+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Joshua Harlow <jxharlow@godaddy.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 03 Sep 2016 04:50:04 +0000
+Reviewed-on: https://review.openstack.org/364767
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
