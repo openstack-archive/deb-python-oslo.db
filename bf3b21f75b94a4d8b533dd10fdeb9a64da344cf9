@@ -1,0 +1,9 @@
+Code-Review+2: Ihar Hrachyshka <ihrachys@redhat.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 05 Sep 2016 14:32:46 +0000
+Reviewed-on: https://review.openstack.org/365227
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/newton

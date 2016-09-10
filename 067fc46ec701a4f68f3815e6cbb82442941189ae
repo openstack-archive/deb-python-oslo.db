@@ -1,0 +1,9 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Code-Review+1: Eric Brown <browne@vmware.com>
+Workflow+1: Joshua Harlow <jxharlow@godaddy.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Sep 2016 01:30:26 +0000
+Reviewed-on: https://review.openstack.org/362365
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/newton
