@@ -132,21 +132,3 @@ Description: database connectivity to the different backends and helper utils - 
  helper utils.
  .
  This package contains the documentation.
-
-Package: python-oslo-db
-Section: oldlibs
-Priority: extra
-Architecture: all
-Depends: python-oslo.db,
-         ${misc:Depends},
-Description: transitional dummy package for python-oslo-db
- This transitional package is safe to remove.
-
-Package: python-oslo-db-doc
-Section: oldlibs
-Priority: extra
-Architecture: all
-Depends: python-oslo.db-doc,
-         ${misc:Depends},
-Description: transitional dummy package for python-oslo-db-doc
- This transitional package is safe to remove.
