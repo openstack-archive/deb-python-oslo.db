@@ -31,6 +31,7 @@ from sqlalchemy import Column
 from sqlalchemy.engine import Connectable
 from sqlalchemy.engine import reflection
 from sqlalchemy.engine import url as sa_url
+from sqlalchemy import exc
 from sqlalchemy import func
 from sqlalchemy import Index
 from sqlalchemy import inspect
@@ -64,6 +65,71 @@ def sanitize_db_url(url):
     if match:
         return '%s****:****%s' % (url[:match.start(1)], url[match.end(2):])
     return url
+
+
+def _get_unique_keys(model):
+    """Get a list of sets of unique model keys.
+
+    :param model: the ORM model class
+    :rtype: list of sets of strings
+    :return: unique model keys or None if unable to find them
+    """
+
+    try:
+        mapper = inspect(model)
+    except exc.NoInspectionAvailable:
+        return None
+    else:
+        local_table = mapper.local_table
+        base_table = mapper.base_mapper.local_table
+
+        if local_table is None:
+            return None
+
+    # extract result from cache if present
+    has_info = hasattr(local_table, 'info')
+    if has_info:
+        info = local_table.info
+        if 'oslodb_unique_keys' in info:
+            return info['oslodb_unique_keys']
+
+    res = []
+    try:
+        constraints = base_table.constraints
+    except AttributeError:
+        constraints = []
+    for constraint in constraints:
+        # filter out any CheckConstraints
+        if isinstance(constraint, (sqlalchemy.UniqueConstraint,
+                                   sqlalchemy.PrimaryKeyConstraint)):
+            res.append({c.name for c in constraint.columns})
+    try:
+        indexes = base_table.indexes
+    except AttributeError:
+        indexes = []
+    for index in indexes:
+        if index.unique:
+            res.append({c.name for c in index.columns})
+    # cache result for next calls with the same model
+    if has_info:
+        info['oslodb_unique_keys'] = res
+    return res
+
+
+def _stable_sorting_order(model, sort_keys):
+    """Check whetever the sorting order is stable.
+
+    :return: True if it is stable, False if it's not, None if it's impossible
+    to determine.
+    """
+    keys = _get_unique_keys(model)
+    if keys is None:
+        return None
+    sort_keys_set = set(sort_keys)
+    for unique_keys in keys:
+        if unique_keys.issubset(sort_keys_set):
+            return True
+    return False
 
 
 # copy from glance/db/sqlalchemy/api.py
@@ -100,11 +166,9 @@ def paginate_query(query, model, limit, sort_keys, marker=None,
     :rtype: sqlalchemy.orm.query.Query
     :return: The query with sorting/pagination added.
     """
-
-    if 'id' not in sort_keys:
-        # TODO(justinsb): If this ever gives a false-positive, check
-        # the actual primary key, rather than assuming its id
-        LOG.warning(_LW('Id not in sort_keys; is sort_keys unique?'))
+    if _stable_sorting_order(model, sort_keys) is False:
+        LOG.warning(_LW('Unique keys not in sort_keys. '
+                        'The sorting order may be unstable.'))
 
     assert(not (sort_dir and sort_dirs))
 

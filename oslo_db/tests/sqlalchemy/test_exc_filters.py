@@ -512,16 +512,11 @@ class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
             self.table_2.insert({'id': 1, 'foo_id': 2})
         )
 
-        self.assertInnerException(
-            matched,
-            "IntegrityError",
-            (1452, "Cannot add or update a child row: a "
-             "foreign key constraint fails (`{0}`.`resource_entity`, "
-             "CONSTRAINT `foo_fkey` FOREIGN KEY (`foo_id`) REFERENCES "
-             "`resource_foo` (`id`))".format(self.engine.url.database)),
-            "INSERT INTO resource_entity (id, foo_id) VALUES (%s, %s)",
-            (1, 2)
-        )
+        # NOTE(jd) Cannot check precisely with assertInnerException since MySQL
+        # error are not the same depending on its version…
+        self.assertIsInstance(matched.inner_exception,
+                              sqlalchemy.exc.IntegrityError)
+        self.assertEqual(matched.inner_exception.orig.args[0], 1452)
         self.assertEqual("resource_entity", matched.table)
         self.assertEqual("foo_fkey", matched.constraint)
         self.assertEqual("foo_id", matched.key)
@@ -540,19 +535,11 @@ class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
                 self.table_2.insert({'id': 1, 'foo_id': 2})
             )
 
-        self.assertInnerException(
-            matched,
-            "IntegrityError",
-            (
-                1452,
-                'Cannot add or update a child row: a '
-                'foreign key constraint fails ("{0}"."resource_entity", '
-                'CONSTRAINT "foo_fkey" FOREIGN KEY ("foo_id") REFERENCES '
-                '"resource_foo" ("id"))'.format(self.engine.url.database)
-            ),
-            "INSERT INTO resource_entity (id, foo_id) VALUES (%s, %s)",
-            (1, 2)
-        )
+        # NOTE(jd) Cannot check precisely with assertInnerException since MySQL
+        # error are not the same depending on its version…
+        self.assertIsInstance(matched.inner_exception,
+                              sqlalchemy.exc.IntegrityError)
+        self.assertEqual(matched.inner_exception.orig.args[0], 1452)
         self.assertEqual("resource_entity", matched.table)
         self.assertEqual("foo_fkey", matched.constraint)
         self.assertEqual("foo_id", matched.key)
@@ -567,21 +554,11 @@ class TestReferenceErrorMySQL(TestReferenceErrorSQLite,
             self.engine.execute,
             self.table_1.delete()
         )
-        self.assertInnerException(
-            matched,
-            "IntegrityError",
-            (
-                1451,
-                "Cannot delete or update a parent row: a foreign key "
-                "constraint fails (`{0}`.`resource_entity`, "
-                "constraint `foo_fkey` "
-                "foreign key (`foo_id`) references "
-                "`resource_foo` (`id`))".format(self.engine.url.database)
-            ),
-            "DELETE FROM resource_foo",
-            (),
-        )
-
+        # NOTE(jd) Cannot check precisely with assertInnerException since MySQL
+        # error are not the same depending on its version…
+        self.assertIsInstance(matched.inner_exception,
+                              sqlalchemy.exc.IntegrityError)
+        self.assertEqual(1451, matched.inner_exception.orig.args[0])
         self.assertEqual("resource_entity", matched.table)
         self.assertEqual("foo_fkey", matched.constraint)
         self.assertEqual("foo_id", matched.key)
@@ -870,7 +847,7 @@ class TestDeadlock(TestsExceptionFilter):
         if isinstance(matched, exception.DBError):
             matched = matched.inner_exception
 
-        self.assertEqual(matched.orig.__class__.__name__, expected_dbapi_cls)
+        self.assertEqual(expected_dbapi_cls, matched.orig.__class__.__name__)
 
     def test_mysql_pymysql_deadlock(self):
         self._run_deadlock_detect_test(
@@ -884,7 +861,8 @@ class TestDeadlock(TestsExceptionFilter):
         self._run_deadlock_detect_test(
             "mysql",
             "(1205, 'Lock wait timeout exceeded; "
-            "try restarting transaction')"
+            "try restarting transaction')",
+            orig_exception_cls=self.InternalError
         )
 
     def test_mysql_mysqlconnector_deadlock(self):
@@ -1099,7 +1077,7 @@ class TestDBDisconnected(TestsExceptionFilter):
         with self._fixture(dialect_name, exc_obj, 1, is_disconnect):
             conn = self.engine.connect()
             with conn.begin():
-                self.assertEqual(conn.scalar(sqla.select([1])), 1)
+                self.assertEqual(1, conn.scalar(sqla.select([1])))
                 self.assertFalse(conn.closed)
                 self.assertFalse(conn.invalidated)
                 self.assertTrue(conn.in_transaction())
@@ -1112,7 +1090,7 @@ class TestDBDisconnected(TestsExceptionFilter):
 
         # test implicit execution
         with self._fixture(dialect_name, exc_obj, 1):
-            self.assertEqual(self.engine.scalar(sqla.select([1])), 1)
+            self.assertEqual(1, self.engine.scalar(sqla.select([1])))
 
     def test_mysql_ping_listener_disconnected(self):
         for code in [2006, 2013, 2014, 2045, 2055]:
@@ -1219,7 +1197,7 @@ class TestDBConnectRetry(TestsExceptionFilter):
             2, -1
         )
         # conn is good
-        self.assertEqual(conn.scalar(sqla.select([1])), 1)
+        self.assertEqual(1, conn.scalar(sqla.select([1])))
 
     def test_connect_retry_past_failure(self):
         conn = self._run_test(
@@ -1228,7 +1206,7 @@ class TestDBConnectRetry(TestsExceptionFilter):
             2, 3
         )
         # conn is good
-        self.assertEqual(conn.scalar(sqla.select([1])), 1)
+        self.assertEqual(1, conn.scalar(sqla.select([1])))
 
     def test_connect_retry_not_candidate_exception(self):
         self.assertRaises(
@@ -1256,7 +1234,7 @@ class TestDBConnectRetry(TestsExceptionFilter):
             2, -1
         )
         # conn is good
-        self.assertEqual(conn.scalar(sqla.select([1])), 1)
+        self.assertEqual(1, conn.scalar(sqla.select([1])))
 
     def test_db2_error_negative(self):
         self.assertRaises(
@@ -1313,7 +1291,7 @@ class TestDBConnectPingWrapping(TestsExceptionFilter):
             self, dialect_name, exc_obj, is_disconnect=True):
         with self._fixture(dialect_name, exc_obj, 3, is_disconnect):
             conn = self.engine.connect()
-            self.assertEqual(conn.scalar(sqla.select([1])), 1)
+            self.assertEqual(1, conn.scalar(sqla.select([1])))
             conn.close()
 
         with self._fixture(dialect_name, exc_obj, 1, is_disconnect):

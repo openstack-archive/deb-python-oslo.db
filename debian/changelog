@@ -1,4 +1,15 @@
-python-oslo.db (4.9.0-1) UNRELEASED; urgency=medium
+python-oslo.db (4.13.3-1) experimental; urgency=medium
+
+  [ David Della Vecchia ]
+  * New upstream release.
+  * d/control: Align (build-)depends with upstream.
+
+  [ Thomas Goirand ]
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 11 Sep 2016 18:00:43 +0200
+
+python-oslo.db (4.12.0-1) experimental; urgency=medium
 
   [ Ondřej Nový ]
   * Standards-Version is 3.9.8 now (no change)
@@ -11,7 +22,11 @@ python-oslo.db (4.9.0-1) UNRELEASED; urgency=medium
   * .gitreview: Copy file from orig tar.
   * d/control: Align (Build-)Depends with upstream.
 
- -- Corey Bryant <corey.bryant@canonical.com>  Mon, 08 Aug 2016 13:23:11 -0400
+  [ James Page ]
+  * Align (Build-)Depends with upstream.
+  * New upstream release.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Thu, 25 Aug 2016 08:30:49 +0100
 
 python-oslo.db (4.7.0-2) unstable; urgency=medium
 
