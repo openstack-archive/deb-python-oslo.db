@@ -6,6 +6,8 @@ python-oslo.db (4.13.3-1) experimental; urgency=medium
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Using OpenStack's Gerrit as VCS URLs.
+  * Using pkgos-dh_auto_{install,test} from openstack-pkg-tools >= 52~.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 11 Sep 2016 18:00:43 +0200
 
