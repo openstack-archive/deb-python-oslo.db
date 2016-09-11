@@ -31,6 +31,7 @@ from sqlalchemy.engine import url as sa_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import mapper
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import select
 from sqlalchemy.types import UserDefinedType, NullType
@@ -91,6 +92,52 @@ class FakeTable(Base):
 
     def foo(self):
         pass
+
+
+class FakeTableJoinedInh(FakeTable):
+    __tablename__ = 'fake_table_inh'
+
+    id = Column(String(50), ForeignKey('fake_table.user_id'))
+
+
+class FakeTableSingleInh(FakeTable):
+    __mapper_args__ = {'polymorphic_identity': 'foo'}
+
+
+class FakeTableWithMultipleKeys(Base):
+    __tablename__ = 'fake_table_multiple_keys'
+
+    key1 = Column(String(50), primary_key=True)
+    key2 = Column(String(50), primary_key=True)
+    key3 = Column(String(50))
+
+
+class FakeTableWithIndexes(Base):
+    __tablename__ = 'fake_table_unique_index'
+
+    id = Column(String(50), primary_key=True)
+    key1 = Column(String(50))
+    key2 = Column(String(50))
+    key3 = Column(String(50))
+
+    __table_args__ = (
+        Index('idx_unique', 'key1', 'key2', unique=True),
+        Index('idx_unique', 'key1', 'key3', unique=False),
+    )
+
+
+class FakeTableClassicalyMapped(object):
+    pass
+
+
+fake_table = Table(
+    'fake_table_classically_mapped',
+    Base.metadata,
+    Column('id', Integer, primary_key=True),
+    Column('key', String(50))
+)
+
+mapper(FakeTableClassicalyMapped, fake_table)
 
 
 class FakeModel(object):
@@ -276,6 +323,101 @@ class TestPaginateQuery(test_base.BaseTestCase):
                              sort_dirs=['asc', 'desc'])
 
 
+class Test_UnstableSortingOrder(test_base.BaseTestCase):
+    def test_multiple_primary_keys_stable(self):
+        self.assertTrue(
+            utils._stable_sorting_order(
+                FakeTableWithMultipleKeys, ['key1', 'key2']))
+
+    def test_classically_mapped_primary_keys_stable(self):
+        self.assertTrue(
+            utils._stable_sorting_order(FakeTableClassicalyMapped, ['id']))
+
+    def test_multiple_primary_keys_unstable(self):
+        self.assertFalse(
+            utils._stable_sorting_order(
+                FakeTableWithMultipleKeys, ['key1', 'key3']))
+
+    def test_joined_inh_stable(self):
+        self.assertTrue(
+            utils._stable_sorting_order(FakeTableJoinedInh, ['user_id'])
+        )
+
+    def test_single_inh_stable(self):
+        self.assertTrue(
+            utils._stable_sorting_order(FakeTableSingleInh, ['user_id'])
+        )
+
+    def test_unknown_primary_keys_stable(self):
+        self.assertIsNone(
+            utils._stable_sorting_order(object, ['key1', 'key2']))
+
+    def test_unique_index_stable(self):
+        self.assertTrue(
+            utils._stable_sorting_order(
+                FakeTableWithIndexes, ['key1', 'key2']))
+
+    def test_unique_index_unstable(self):
+        self.assertFalse(
+            utils._stable_sorting_order(
+                FakeTableWithIndexes, ['key1', 'key3']))
+
+
+class TestGetUniqueKeys(test_base.BaseTestCase):
+    def test_multiple_primary_keys(self):
+        self.assertEqual(
+            [{'key1', 'key2'}],
+            utils._get_unique_keys(FakeTableWithMultipleKeys))
+
+    def test_unique_index(self):
+        self.assertEqual(
+            [{'id'}, {'key1', 'key2'}],
+            utils._get_unique_keys(FakeTableWithIndexes))
+
+    def test_unknown_primary_keys(self):
+        self.assertIsNone(utils._get_unique_keys(object))
+
+    def test_cache(self):
+
+        class CacheTable(object):
+            info = {}
+            constraints_called = 0
+            indexes_called = 0
+
+            @property
+            def constraints(self):
+                self.constraints_called += 1
+                return []
+
+            @property
+            def indexes(self):
+                self.indexes_called += 1
+                return []
+
+        class CacheModel(object):
+            pass
+
+        table = CacheTable()
+        mapper_mock = mock.Mock(mapped_table=table, local_table=table)
+        mapper_mock.base_mapper = mapper_mock
+        mock_inspect = mock.Mock(
+            return_value=mapper_mock)
+        model = CacheModel()
+        self.assertNotIn('oslodb_unique_keys', CacheTable.info)
+        with mock.patch("oslo_db.sqlalchemy.utils.inspect", mock_inspect):
+            utils._get_unique_keys(model)
+
+        self.assertIn('oslodb_unique_keys', CacheTable.info)
+        self.assertEqual(1, table.constraints_called)
+        self.assertEqual(1, table.indexes_called)
+
+        for i in range(10):
+            utils._get_unique_keys(model)
+
+        self.assertEqual(1, table.constraints_called)
+        self.assertEqual(1, table.indexes_called)
+
+
 class TestPaginateQueryActualSQL(test_base.BaseTestCase):
 
     def test_paginate_on_hybrid_assert_stmt(self):
@@ -293,8 +435,8 @@ class TestPaginateQueryActualSQL(test_base.BaseTestCase):
         )
 
         self.assertEqual(
-            str(q.statement.compile()),
-            str(expected_core_sql.compile())
+            str(expected_core_sql.compile()),
+            str(q.statement.compile())
         )
 
 
@@ -357,7 +499,7 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         real_ids = [row[0] for row in
                     self.engine.execute(select([test_table.c.id])).fetchall()]
 
-        self.assertEqual(len(real_ids), len(expected_ids))
+        self.assertEqual(len(expected_ids), len(real_ids))
         for id_ in expected_ids:
             self.assertTrue(id_ in real_ids)
 
@@ -397,7 +539,7 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         rows_select = base_select.where(table.c.deleted != table.c.id)
         row_ids = [row['id'] for row in
                    self.engine.execute(rows_select).fetchall()]
-        self.assertEqual(len(row_ids), len(expected_values))
+        self.assertEqual(len(expected_values), len(row_ids))
         for value in expected_values:
             self.assertTrue(value['id'] in row_ids)
 
@@ -406,8 +548,8 @@ class TestMigrationUtils(db_test_base.DbTestCase):
         deleted_rows_ids = [row['id'] for row in
                             self.engine.execute(
                                 deleted_rows_select).fetchall()]
-        self.assertEqual(len(deleted_rows_ids),
-                         len(values) - len(row_ids))
+        self.assertEqual(len(values) - len(row_ids),
+                         len(deleted_rows_ids))
         for value in soft_deleted_values:
             self.assertTrue(value['id'] in deleted_rows_ids)
 
@@ -435,12 +577,12 @@ class TestMigrationUtils(db_test_base.DbTestCase):
 
         insp = reflection.Inspector.from_engine(self.engine)
         real_indexes = insp.get_indexes(table_name)
-        self.assertEqual(len(real_indexes), 3)
+        self.assertEqual(3, len(real_indexes))
         for index in real_indexes:
             name = index['name']
             self.assertIn(name, indexes)
-            self.assertEqual(set(index['column_names']),
-                             set(indexes[name]))
+            self.assertEqual(set(indexes[name]),
+                             set(index['column_names']))
 
     def test_change_deleted_column_type_to_id_type_integer(self):
         table_name = 'abc'
@@ -611,13 +753,13 @@ class TestMigrationUtils(db_test_base.DbTestCase):
                                                   query_insert)
         result_insert = self.conn.execute(insert_statement)
         # Verify we insert 4 rows
-        self.assertEqual(result_insert.rowcount, 4)
+        self.assertEqual(4, result_insert.rowcount)
 
         query_all = select([insert_table]).where(
             insert_table.c.uuid.in_(uuidstrs))
         rows = self.conn.execute(query_all).fetchall()
         # Verify we really have 4 rows in insert_table
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(4, len(rows))
 
     def test_insert_from_select_with_specified_columns(self):
         insert_table_name = "__test_insert_to_table__"
@@ -651,13 +793,13 @@ class TestMigrationUtils(db_test_base.DbTestCase):
                                                   query_insert, ['id', 'uuid'])
         result_insert = self.conn.execute(insert_statement)
         # Verify we insert 4 rows
-        self.assertEqual(result_insert.rowcount, 4)
+        self.assertEqual(4, result_insert.rowcount)
 
         query_all = select([insert_table]).where(
             insert_table.c.uuid.in_(uuidstrs))
         rows = self.conn.execute(query_all).fetchall()
         # Verify we really have 4 rows in insert_table
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(4, len(rows))
 
     def test_insert_from_select_with_specified_columns_negative(self):
         insert_table_name = "__test_insert_to_table__"
@@ -737,12 +879,12 @@ class TestConnectionUtils(test_utils.BaseTestCase):
 
     def test_connect_string(self):
         connect_string = utils.get_connect_string(**self.full_credentials)
-        self.assertEqual(connect_string, self.connect_string)
+        self.assertEqual(self.connect_string, connect_string)
 
     def test_connect_string_sqlite(self):
         sqlite_credentials = {'backend': 'sqlite', 'database': 'test.db'}
         connect_string = utils.get_connect_string(**sqlite_credentials)
-        self.assertEqual(connect_string, 'sqlite:///test.db')
+        self.assertEqual('sqlite:///test.db', connect_string)
 
     def test_is_backend_avail(self):
         self.mox.StubOutWithMock(sqlalchemy.engine.base.Engine, 'connect')
@@ -785,7 +927,9 @@ class TestConnectionUtils(test_utils.BaseTestCase):
             exception.BackendNotAvailable,
             provision.Backend._ensure_backend_available, self.connect_string
         )
-        self.assertEqual("Could not connect", str(exc))
+        self.assertEqual(
+            "Backend 'postgresql' is unavailable: "
+            "Could not connect", str(exc))
         self.assertEqual(
             "The postgresql backend is unavailable: %s" % err,
             log.output.strip())
@@ -802,20 +946,22 @@ class TestConnectionUtils(test_utils.BaseTestCase):
             exception.BackendNotAvailable,
             provision.Backend._ensure_backend_available, self.connect_string
         )
-        self.assertEqual("No DBAPI installed", str(exc))
+        self.assertEqual(
+            "Backend 'postgresql' is unavailable: "
+            "No DBAPI installed", str(exc))
         self.assertEqual(
             "The postgresql backend is unavailable: Can't import "
             "DBAPI module foobar", log.output.strip())
 
     def test_get_db_connection_info(self):
         conn_pieces = parse.urlparse(self.connect_string)
-        self.assertEqual(utils.get_db_connection_info(conn_pieces),
-                         ('dude', 'pass', 'test', 'localhost'))
+        self.assertEqual(('dude', 'pass', 'test', 'localhost'),
+                         utils.get_db_connection_info(conn_pieces))
 
     def test_connect_string_host(self):
         self.full_credentials['host'] = 'myhost'
         connect_string = utils.get_connect_string(**self.full_credentials)
-        self.assertEqual(connect_string, 'postgresql://dude:pass@myhost/test')
+        self.assertEqual('postgresql://dude:pass@myhost/test', connect_string)
 
 
 class MyModelSoftDeletedProjectId(declarative_base(), models.ModelBase,
@@ -858,8 +1004,8 @@ class TestModelQuery(test_base.BaseTestCase):
             MyModelSoftDeleted, session=self.session, deleted=False)
 
         deleted_filter = mock_query.filter.call_args[0][0]
-        self.assertEqual(str(deleted_filter),
-                         'soft_deleted_test_model.deleted = :deleted_1')
+        self.assertEqual('soft_deleted_test_model.deleted = :deleted_1',
+                         str(deleted_filter))
         self.assertEqual(deleted_filter.right.value,
                          MyModelSoftDeleted.__mapper__.c.deleted.default.arg)
 
@@ -876,7 +1022,7 @@ class TestModelQuery(test_base.BaseTestCase):
     @mock.patch.object(utils, "_read_deleted_filter")
     def test_no_deleted_value(self, _read_deleted_filter):
         utils.model_query(MyModelSoftDeleted, session=self.session)
-        self.assertEqual(_read_deleted_filter.call_count, 0)
+        self.assertEqual(0, _read_deleted_filter.call_count)
 
     def test_project_filter(self):
         project_id = 10
@@ -887,9 +1033,9 @@ class TestModelQuery(test_base.BaseTestCase):
 
         deleted_filter = mock_query.filter.call_args[0][0]
         self.assertEqual(
-            str(deleted_filter),
-            'soft_deleted_project_id_test_model.project_id = :project_id_1')
-        self.assertEqual(deleted_filter.right.value, project_id)
+            'soft_deleted_project_id_test_model.project_id = :project_id_1',
+            str(deleted_filter))
+        self.assertEqual(project_id, deleted_filter.right.value)
 
     def test_project_filter_wrong_model(self):
         self.assertRaises(ValueError, utils.model_query,
@@ -902,9 +1048,9 @@ class TestModelQuery(test_base.BaseTestCase):
             session=self.session, project_id=(10, None))
 
         self.assertEqual(
-            str(mock_query.filter.call_args[0][0]),
             'soft_deleted_project_id_test_model.project_id'
-            ' IN (:project_id_1, NULL)'
+            ' IN (:project_id_1, NULL)',
+            str(mock_query.filter.call_args[0][0])
         )
 
     def test_model_query_common(self):
@@ -1168,7 +1314,7 @@ class TestDialectFunctionDispatcher(test_base.BaseTestCase):
         callable_fn.mysql_pymysql.return_value = 5
 
         self.assertEqual(
-            dispatcher("mysql+pymysql://u:p@h/t", 3), 5
+            5, dispatcher("mysql+pymysql://u:p@h/t", 3)
         )
 
     def test_engine(self):
