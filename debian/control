@@ -63,8 +63,8 @@ Build-Depends-Indep: alembic (>= 0.8.4),
                      subunit,
                      testrepository,
 Standards-Version: 3.9.8
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-python-oslo.db
-Vcs-Git: https://git.openstack.org/openstack/deb-python-oslo.db
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-python-oslo.db?h=debian%2Fnewton
+Vcs-Git: https://git.openstack.org/openstack/deb-python-oslo.db -b debian/newton
 Homepage: https://launchpad.net/oslo
 
 Package: python-oslo.db
