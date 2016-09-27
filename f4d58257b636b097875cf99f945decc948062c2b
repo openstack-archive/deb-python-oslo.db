@@ -1,0 +1,8 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Workflow+1: Doug Hellmann <doug@doughellmann.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 23 Sep 2016 16:34:18 +0000
+Reviewed-on: https://review.openstack.org/373297
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/newton
