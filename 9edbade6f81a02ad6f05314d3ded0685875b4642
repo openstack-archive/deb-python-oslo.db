@@ -1,0 +1,8 @@
+Code-Review+2: Thomas Goirand <thomas@goirand.fr>
+Workflow+1: Thomas Goirand <thomas@goirand.fr>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Oct 2016 12:42:43 +0000
+Reviewed-on: https://review.openstack.org/381719
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/debian/newton
