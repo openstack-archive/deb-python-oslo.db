@@ -1,0 +1,9 @@
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Workflow+1: Gevorg Davoian <gdavoian@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 26 Oct 2016 20:20:39 +0000
+Reviewed-on: https://review.openstack.org/387025
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
