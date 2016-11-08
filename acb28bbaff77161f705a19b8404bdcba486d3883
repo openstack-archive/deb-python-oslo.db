@@ -1,0 +1,9 @@
+Code-Review+1: amrith <amrith@tesora.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 08 Nov 2016 13:57:47 +0000
+Reviewed-on: https://review.openstack.org/394108
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
