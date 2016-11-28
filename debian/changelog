@@ -1,8 +1,10 @@
-python-oslo.db (4.13.3-3) UNRELEASED; urgency=medium
+python-oslo.db (4.13.3-3) unstable; urgency=medium
 
+  * Team upload.
   * Bumped debhelper compat version to 10
+  * Patch-out upper constraints of SQLAlchemy
 
- -- Ondřej Nový <onovy@debian.org>  Thu, 24 Nov 2016 00:09:09 +0100
+ -- Ondřej Nový <onovy@debian.org>  Mon, 28 Nov 2016 12:22:25 +0100
 
 python-oslo.db (4.13.3-2) unstable; urgency=medium
 
