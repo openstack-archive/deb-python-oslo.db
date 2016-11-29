@@ -1,0 +1,10 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review-1: Michael Bayer <mike_mp@zzzcomputing.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 28 Nov 2016 15:13:45 +0000
+Reviewed-on: https://review.openstack.org/403631
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
