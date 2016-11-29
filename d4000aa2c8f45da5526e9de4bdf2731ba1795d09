@@ -1,0 +1,9 @@
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 28 Nov 2016 13:21:31 +0000
+Reviewed-on: https://review.openstack.org/403275
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/stable/newton
