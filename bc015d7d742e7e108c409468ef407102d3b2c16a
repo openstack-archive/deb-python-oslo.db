@@ -1,0 +1,9 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Dec 2016 12:09:54 +0000
+Reviewed-on: https://review.openstack.org/402128
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
