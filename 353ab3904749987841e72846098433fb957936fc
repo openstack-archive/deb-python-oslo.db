@@ -1,0 +1,9 @@
+Code-Review+1: Michael Bayer <mike_mp@zzzcomputing.com>
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 07 Feb 2017 06:20:04 +0000
+Reviewed-on: https://review.openstack.org/429857
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
