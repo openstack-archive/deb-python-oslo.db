@@ -1,0 +1,11 @@
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+2: Roman Podoliaka <rpodolyaka@mirantis.com>
+Workflow+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 03 Mar 2017 05:01:18 +0000
+Reviewed-on: https://review.openstack.org/435269
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
