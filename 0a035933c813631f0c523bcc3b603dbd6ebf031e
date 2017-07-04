@@ -1,0 +1,10 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+1: Nguyen Van Trung <trungnv@vn.fujitsu.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Jul 2017 04:03:20 +0000
+Reviewed-on: https://review.openstack.org/479489
+Project: openstack/deb-python-oslo.db
+Branch: refs/heads/master
