@@ -1,5 +1,0 @@
----
-upgrade:
-  - The configuration option ``sqlite_db`` is removed. Pease use
-    configuration option ``connection`` or ``slave_connection``
-    to connect to the database.

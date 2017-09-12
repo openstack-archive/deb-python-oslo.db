@@ -1,6 +1,0 @@
----
-features:
-  - enginefacade decorators can now be used for class and instance methods,
-    which implicitly receive the first positional argument. Previously, it
-    was required that all decorated functions receive a context value as the
-    first argument.
